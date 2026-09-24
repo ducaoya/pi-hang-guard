@@ -215,8 +215,23 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 
 替代方案（不想本地 hold token 时）：先用 `npx setup-trusted-publishing` 之类工具发一个 `0.0.0` 占位版本，再绑定 Trusted Publisher，然后由 CI 发 0.1.0。
 
+### 提交身份与隐私（重要）
+
+- **本仓身份固定为仓库级配置** `ducaoya <ducaoya@users.noreply.github.com>`（`git config --local`）。不要依赖全局配置：本机全局配置是工作身份，会把非公开邮箱写进提交/标签元数据并永久公开。新建个人仓库时同样要设仓库级身份。
+- 提交前检查元数据，不只是文件内容：
+
+  ```bash
+  git log --format='%an <%ae> %cn <%ce>'            # 提交作者/提交者邮箱
+  git for-each-ref --format='%(refname) %(taggername) %(taggeremail)'   # annotated tag 内嵌 tagger 身份（最容易漏）
+  ```
+
+- **一旦泄露，强推不够**：`git push --force` 只让旧提交“不再被引用”，其 cached view 仍能用 SHA 直连访问（`https://github.com/<owner>/<repo>/commit/<sha>.patch` 仍会返回原作者邮箱，实测如此）。要彻底清除只有两条路：**删库重建**，或联系 GitHub Support 清除 cached views。删库重建后本地建议一并 `git reflog expire --expire=now --all && git gc --prune=now` 回收旧对象。
+- 删库重建后需**重新绑定 npm 的 Trusted Publisher**：npm 内部记录了 GitHub 的 `repo_id`，重建会换掉它，导致 CI 发布报 OIDC 失败（错误信息会误显为 `404 not in this registry` / `ENEEDAUTH`）。
+- 在 GitHub 开启 **Settings → Emails →“Keep my email addresses private”+“Block command line pushes that expose my email”**，这是唯一能自动拦住此类推送的机制。
+
 ### 禁忌
 
+- ❌ 不要把工作邮箱、本机绝对路径、内部项目名写进提交信息、标签信息或**任何随仓发布的文档**（包括本文档）
 - ❌ 不要 `npm config set //registry.npmjs.org/:_authToken=...`（凭据不入 `~/.npmrc` 常驻）
 - ❌ 不要把 token 提交进仓库或粘贴进对话
 - ❌ 不要给普通提交用 `[release]` 开头的主题（会触发发布）
