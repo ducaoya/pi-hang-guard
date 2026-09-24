@@ -111,6 +111,56 @@ export function completionMessage(input: {
 	return `${input.toolName} 最终${outcome}（耗时 ${formatDuration(input.observedMs)}${peak}）`;
 }
 
+export interface ResumeReport {
+	action: "soft-kill" | "abort";
+	toolName: string;
+	command: string;
+	kind: CommandKind;
+	basis: "idle" | "runtime";
+	observedMs: number;
+	thresholdSec: number;
+	mode: GuardMode;
+	/** 1-based index of this automatic resumption. Defaults to 1. */
+	resumeIndex?: number;
+	maxResumes?: number;
+	softKillDetail?: string;
+	/** Captured tail of the tool's streamed output, if any. */
+	outputTail?: string;
+}
+
+/** Human label for an escalation step. */
+export function actionLabel(action: "soft-kill" | "abort"): string {
+	return action === "soft-kill" ? "杀掉已登记的子进程（保留本轮对话）" : "中止本轮对话";
+}
+
+const MAX_TAIL_CHARS = 1500;
+
+/**
+ * Structured report handed back to the model after an automatic action.
+ *
+ * The aborted tool result only says `Command aborted`, so without this the model
+ * has no idea why the turn ended.
+ */
+export function resumeMessage(report: ResumeReport): string {
+	const lines = [
+		"[pi-hang-guard] 已自动处置一个疑似卡死的命令",
+		"",
+		`动作: ${actionLabel(report.action)}（第 ${report.resumeIndex ?? 1}/${report.maxResumes ?? 1} 次自动续跑，mode=${report.mode}）`,
+		`原因: ${report.toolName} ${observationLabel(report.basis, report.observedMs)}（超过 ${report.thresholdSec}s 阈值，${kindLabel(report.kind)}）`,
+		`命令: ${previewCommand(report.command, 120)}`,
+	];
+	if (report.softKillDetail) lines.push(`补充: ${report.softKillDetail}`);
+	const tail = (report.outputTail ?? "").trim();
+	if (tail !== "") {
+		lines.push("", "已收集的输出尾部:", "```", tail.slice(-MAX_TAIL_CHARS), "```");
+	}
+	lines.push(
+		"",
+		"请继续处理：先判断该命令是在等待输入、网络挂起，还是本身就是 dev/watch 服务；若是服务类命令，改用后台运行并轮询日志，不要在前台阻塞。",
+	);
+	return lines.join("\n");
+}
+
 /** One-line summary used by `/guard status`. */
 export function statusLine(input: StatusInput): string {
 	return statusText(input);

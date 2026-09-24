@@ -68,6 +68,8 @@ interface FakePi {
 	api: Record<string, unknown>;
 	statuses: Map<string, string>;
 	notifications: Array<{ message: string; level: string }>;
+	sent: Array<{ message: { customType?: string; content?: unknown }; options?: unknown }>;
+	aborts: { count: number };
 	commands: Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>;
 	flags: Map<string, { default?: unknown }>;
 	emit(event: string, payload: unknown): Promise<void>;
@@ -80,10 +82,15 @@ function createFakePi(): FakePi {
 	const flags = new Map<string, { default?: unknown }>();
 	const statuses = new Map<string, string>();
 	const notifications: Array<{ message: string; level: string }> = [];
+	const sent: FakePi["sent"] = [];
+	const aborts = { count: 0 };
 
 	const ctx = {
 		hasUI: true,
 		cwd: root,
+		abort: () => {
+			aborts.count += 1;
+		},
 		ui: {
 			setStatus(key: string, text: string | undefined) {
 				if (text === undefined) statuses.delete(key);
@@ -111,12 +118,18 @@ function createFakePi(): FakePi {
 		getFlag(name: string) {
 			return flags.get(name)?.default;
 		},
+		sendMessage(message: { customType?: string; content?: unknown }, options?: unknown) {
+			sent.push({ message, options });
+			return Promise.resolve();
+		},
 	};
 
 	return {
 		api,
 		statuses,
 		notifications,
+		sent,
+		aborts,
 		commands,
 		flags,
 		ctx,
@@ -229,6 +242,98 @@ test("end to end: /guard status and /guard off work", async () => {
 
 	await guard.handler("nonsense", fake.ctx);
 	assert.match(fake.notifications.at(-1)?.message ?? "", /用法/);
+});
+
+test("end to end: observe mode only warns, even with tiny thresholds", async () => {
+	process.env.PI_GUARD_MODE = "observe";
+	process.env.PI_GUARD_IDLE_WARN_MS = "40";
+	process.env.PI_GUARD_IDLE_CRITICAL_MS = "80";
+	process.env.PI_GUARD_TICK_MS = "25";
+
+	const fake = createFakePi();
+	const module = await import("../index.ts");
+	module.default(fake.api as never);
+
+	await fake.emit("tool_execution_start", { toolCallId: "obs", toolName: "bash", args: { command: "sleep 60" } });
+	await sleep(200);
+
+	assert.ok(fake.notifications.some((n) => /无输出/.test(n.message)));
+	assert.equal(fake.aborts.count, 0, "observe mode must never abort");
+	assert.equal(fake.sent.length, 0, "observe mode must never restart the flow");
+
+	await fake.emit("tool_execution_end", { toolCallId: "obs", isError: false, result: {} });
+});
+
+test("end to end: guard mode aborts the turn and hands the model a report", async () => {
+	process.env.PI_GUARD_MODE = "guard";
+	process.env.PI_GUARD_IDLE_WARN_MS = "40";
+	process.env.PI_GUARD_IDLE_CRITICAL_MS = "80";
+	process.env.PI_GUARD_TICK_MS = "25";
+
+	const fake = createFakePi();
+	const module = await import("../index.ts");
+	module.default(fake.api as never);
+
+	await fake.emit("session_start", { reason: "startup" });
+	await fake.emit("tool_execution_start", { toolCallId: "act", toolName: "bash", args: { command: "npm run dev" } });
+	await fake.emit("tool_execution_update", {
+		toolCallId: "act",
+		toolName: "bash",
+		args: { command: "npm run dev" },
+		partialResult: { content: [{ type: "text", text: "Pre-transform error: x.vue" }] },
+	});
+
+	await sleep(220);
+	assert.equal(fake.aborts.count, 1, "the turn is aborted once the critical threshold is crossed");
+	assert.ok(fake.notifications.some((n) => /已中止本轮对话/.test(n.message)));
+
+	await fake.emit("agent_settled", {});
+	await sleep(60);
+
+	assert.equal(fake.sent.length, 1, "one structured message must be delivered");
+	const delivered = fake.sent[0];
+	assert.equal(delivered.message.customType, "pi-hang-guard");
+	assert.deepEqual(delivered.options, { triggerTurn: true });
+	const body = String(delivered.message.content);
+	assert.match(body, /已自动处置/);
+	assert.match(body, /npm run dev/);
+	assert.match(body, /Pre-transform error/, "the captured output tail must be included");
+
+	await fake.emit("tool_execution_end", { toolCallId: "act", isError: true, result: {} });
+});
+
+test("end to end: a bundled pi build degrades the soft kill honestly", async () => {
+	process.env.PI_GUARD_MODE = "yolo";
+	process.env.PI_GUARD_IDLE_WARN_MS = "40";
+	process.env.PI_GUARD_IDLE_CRITICAL_MS = "80";
+	process.env.PI_GUARD_TICK_MS = "25";
+	process.env.PI_GUARD_SOFT_KILL_GRACE_MS = "15000";
+
+	const originalEntry = process.argv[1];
+	process.argv[1] = "C:/somewhere/dist/bundle/cli.js";
+	try {
+		const fake = createFakePi();
+		const module = await import("../index.ts");
+		module.default(fake.api as never);
+
+		await fake.emit("session_start", { reason: "startup" });
+		await fake.emit("tool_execution_start", { toolCallId: "b1", toolName: "bash", args: { command: "sleep 60" } });
+		await sleep(220);
+
+		assert.ok(
+			!fake.notifications.some((n) => /已杀掉其子进程/.test(n.message)),
+			"a bundled build must never claim a soft kill it cannot perform",
+		);
+		assert.equal(fake.aborts.count, 1, "it escalates straight to aborting the turn");
+
+		await fake.emit("agent_settled", {});
+		await sleep(60);
+		const body = String(fake.sent.at(-1)?.message.content ?? "");
+		assert.match(body, /soft kill unavailable: this pi is the bundled build/);
+	} finally {
+		if (originalEntry === undefined) delete process.argv[1];
+		else process.argv[1] = originalEntry;
+	}
 });
 
 test("pi's own extension loader can load this package", async (t) => {

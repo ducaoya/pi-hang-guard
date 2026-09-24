@@ -74,14 +74,63 @@ test("non-object config and non-object classify are rejected cleanly", () => {
 	);
 });
 
-test("unimplemented modes fall back to observe with a warning", () => {
+test("escalation modes are accepted and unknown modes are rejected", () => {
+	for (const mode of ["observe", "guard", "yolo"]) {
+		const loaded = loadConfig({
+			path: "/tmp/x.json",
+			env: {},
+			readFile: () => JSON.stringify({ mode }),
+		});
+		assert.equal(loaded.config.mode, mode);
+		assert.deepEqual(loaded.warnings, [], `mode ${mode} must not warn`);
+	}
+
+	const unknown = loadConfig({
+		path: "/tmp/x.json",
+		env: {},
+		readFile: () => JSON.stringify({ mode: "sledgehammer" }),
+	});
+	assert.equal(unknown.config.mode, "observe");
+	assert.match(unknown.warnings.join(" "), /unknown mode/);
+});
+
+test("escalation knobs are validated and clamped", () => {
 	const loaded = loadConfig({
 		path: "/tmp/x.json",
 		env: {},
-		readFile: () => JSON.stringify({ mode: "guard" }),
+		readFile: () =>
+			JSON.stringify({
+				softKillGraceSec: 5,
+				maxAutoResumes: 3,
+				actionCooldownSec: 0,
+				resumeWithoutUI: true,
+				maxAutoResumesBogus: 1,
+			}),
 	});
-	assert.equal(loaded.config.mode, "observe");
-	assert.match(loaded.warnings.join(" "), /not implemented/);
+	assert.equal(loaded.config.softKillGraceSec, 5);
+	assert.equal(loaded.config.maxAutoResumes, 3);
+	assert.equal(loaded.config.actionCooldownSec, 0);
+	assert.equal(loaded.config.resumeWithoutUI, true);
+
+	const outOfRange = loadConfig({
+		path: "/tmp/x.json",
+		env: {},
+		readFile: () => JSON.stringify({ maxAutoResumes: 99, softKillGraceSec: -1, resumeWithoutUI: "yes" }),
+	});
+	assert.equal(outOfRange.config.maxAutoResumes, DEFAULT_CONFIG.maxAutoResumes);
+	assert.equal(outOfRange.config.softKillGraceSec, DEFAULT_CONFIG.softKillGraceSec);
+	assert.equal(outOfRange.config.resumeWithoutUI, DEFAULT_CONFIG.resumeWithoutUI);
+	assert.equal(outOfRange.warnings.length, 3);
+});
+
+test("PI_GUARD_MODE accepts the escalation modes", () => {
+	const guard = loadConfig({ path: "/tmp/x.json", env: { PI_GUARD_MODE: "guard" }, readFile: MISSING });
+	assert.equal(guard.config.mode, "guard");
+	assert.deepEqual(guard.warnings, []);
+
+	const bogus = loadConfig({ path: "/tmp/x.json", env: { PI_GUARD_MODE: "nope" }, readFile: MISSING });
+	assert.equal(bogus.config.mode, "observe");
+	assert.match(bogus.warnings.join(" "), /not a known mode/);
 });
 
 test("PI_GUARD_* environment variables override the file", () => {

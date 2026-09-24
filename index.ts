@@ -13,12 +13,27 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { DEFAULT_CONFIG, loadConfig, type GuardConfig } from "./config.ts";
-import { createGuardEngine, type GuardUI } from "./engine.ts";
-import { formatDuration, previewCommand } from "./format.ts";
+import {
+	createGuardEngine,
+	type GuardActions,
+	type GuardUI,
+	type SoftKillOutcome,
+} from "./engine.ts";
+import { formatDuration, previewCommand, resumeMessage } from "./format.ts";
 
 const VERSION = "0.1.2";
+
+function extractOutputText(partialResult: unknown): string {
+	if (typeof partialResult !== "object" || partialResult === null) return "";
+	const content = (partialResult as { content?: unknown }).content;
+	if (!Array.isArray(content) || content.length === 0) return "";
+	const first = content[0] as { type?: string; text?: string } | undefined;
+	return first && first.type === "text" && typeof first.text === "string" ? first.text : "";
+}
 
 export default function commandGuard(pi: ExtensionAPI): void {
 	pi.registerFlag("no-guard", {
@@ -44,6 +59,87 @@ export default function commandGuard(pi: ExtensionAPI): void {
 	/** Set when the UI context goes stale (e.g. after /reload) so the ticker stops. */
 	let stale = false;
 
+	/** Last streamed output per tool call, used to give the model context when resuming. */
+	const outputTails = new Map<string, string>();
+
+	/**
+	 * pi's internal "kill everything I spawned" helper lives outside the package
+	 * `exports` map, so it can only be reached through `getPackageDir()`.
+	 *
+	 * This only works when the running pi is the *unbundled* build: the shipped
+	 * `bin` is `dist/bundle/cli.js`, whose chunks export nothing, so importing
+	 * `dist/utils/shell.js` yields a second module instance with its own empty
+	 * process registry — calling it would silently do nothing and still look like
+	 * a success. We therefore detect the bundled entry up front and report the
+	 * capability as unavailable instead of pretending.
+	 */
+	let killer: (() => void) | null | undefined;
+	let killerUnavailableReason = "not resolved yet";
+	let killerPromise: Promise<void> | null = null;
+
+	function isBundledEntry(): boolean {
+		const entry = process.argv[1] ?? "";
+		return /[\\/]bundle[\\/][^\\/]*\.js$/.test(entry);
+	}
+
+	async function resolveKiller(): Promise<void> {
+		if (killer !== undefined) return;
+		if (killerPromise) return killerPromise;
+		killerPromise = (async () => {
+			try {
+				if (isBundledEntry()) {
+					killer = null;
+					killerUnavailableReason = "this pi is the bundled build; the internal process registry is a private copy";
+					return;
+				}
+				const sdk = (await import("@earendil-works/pi-coding-agent")) as {
+					getPackageDir?: () => string;
+				};
+				const packageDir = typeof sdk.getPackageDir === "function" ? sdk.getPackageDir() : undefined;
+				if (!packageDir) {
+					killer = null;
+					killerUnavailableReason = "getPackageDir() is unavailable";
+					return;
+				}
+				const shell = (await import(
+					pathToFileURL(join(packageDir, "dist", "utils", "shell.js")).href
+				)) as { killTrackedDetachedChildren?: () => void };
+				if (typeof shell.killTrackedDetachedChildren !== "function") {
+					killer = null;
+					killerUnavailableReason = "killTrackedDetachedChildren() is missing from this build";
+					return;
+				}
+				killer = shell.killTrackedDetachedChildren;
+				killerUnavailableReason = "";
+			} catch (error) {
+				killer = null;
+				killerUnavailableReason = error instanceof Error ? error.message : String(error);
+			}
+		})();
+		return killerPromise;
+	}
+
+	const actions: GuardActions = {
+		softKill(): SoftKillOutcome {
+			if (killer === undefined) {
+				void resolveKiller();
+				return { ok: false, detail: "resolving pi's internal killer", pending: true };
+			}
+			if (killer === null) {
+				return { ok: false, detail: killerUnavailableReason };
+			}
+			try {
+				killer();
+				return { ok: true, detail: "pi internal killTrackedDetachedChildren()" };
+			} catch (error) {
+				return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+			}
+		},
+		abortTurn(): void {
+			activeCtx?.abort();
+		},
+	};
+
 	const ui: GuardUI = {
 		setStatus(key, text) {
 			if (stale || !activeCtx) return;
@@ -68,6 +164,7 @@ export default function commandGuard(pi: ExtensionAPI): void {
 	const engine = createGuardEngine({
 		ui,
 		config: () => state.config,
+		actions,
 	});
 
 	const effectiveEnabled = (): boolean => state.config.enabled && !state.noGuard;
@@ -101,6 +198,7 @@ export default function commandGuard(pi: ExtensionAPI): void {
 		const lines = [
 			`pi-hang-guard v${VERSION} · mode=${state.config.mode} · ${effectiveEnabled() ? "on" : "off"}`,
 			`running=${stats.running} skippedInteractive=${stats.skippedInteractive} notifications=${stats.notifications} paused=${stats.paused ? "yes" : "no"}`,
+			`actions=${stats.actions} resumes=${stats.resumes}/${state.config.maxAutoResumes} pendingResume=${stats.pendingResume ? "yes" : "no"}`,
 		];
 		for (const entry of engine.list()) {
 			const observed =
@@ -112,6 +210,11 @@ export default function commandGuard(pi: ExtensionAPI): void {
 			);
 		}
 		lines.push(`config: ${state.configPath}`);
+		for (const action of engine.actionLog().slice(-3)) {
+			lines.push(
+				`action: ${action.action} · ${action.toolName} · ${previewCommand(action.command, 40)} · ${formatDuration(action.observedMs)} 静默`,
+			);
+		}
 		if (state.warnings.length > 0) {
 			lines.push(`warnings: ${state.warnings.join(" | ")}`);
 		}
@@ -128,11 +231,14 @@ export default function commandGuard(pi: ExtensionAPI): void {
 	pi.on("tool_execution_update", (event, ctx) => {
 		activeCtx = ctx;
 		engine.onToolUpdate({ toolCallId: event.toolCallId });
+		const text = extractOutputText(event.partialResult);
+		if (text !== "") outputTails.set(event.toolCallId, text);
 	});
 
 	pi.on("tool_execution_end", (event, ctx) => {
 		activeCtx = ctx;
 		engine.onToolEnd({ toolCallId: event.toolCallId, isError: event.isError === true });
+		outputTails.delete(event.toolCallId);
 		if (!engine.hasRunning()) stopTicker();
 	});
 
@@ -152,6 +258,26 @@ export default function commandGuard(pi: ExtensionAPI): void {
 		activeCtx = ctx;
 		engine.onAgentSettled();
 		stopTicker();
+
+		const report = engine.consumeResume();
+		if (!report) return;
+		if (!ctx.hasUI && !state.config.resumeWithoutUI) return;
+
+		const message = resumeMessage({ ...report, outputTail: outputTails.get(report.toolCallId) });
+		// `agent_settled` is emitted synchronously from the finished run's `finally`
+		// block, so starting a new turn must be deferred out of that call stack.
+		setTimeout(() => {
+			try {
+				void Promise.resolve(
+					pi.sendMessage(
+						{ customType: "pi-hang-guard", content: message, display: true },
+						{ triggerTurn: true },
+					),
+				).catch(() => {});
+			} catch {
+				// Resuming is best effort; never let it surface as an unhandled error.
+			}
+		}, 0);
 	});
 
 	pi.on("session_shutdown", () => {
@@ -162,6 +288,8 @@ export default function commandGuard(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		activeCtx = ctx;
 		state.noGuard = typeof pi.getFlag === "function" && pi.getFlag("no-guard") === true;
+		// Warm the internal killer resolver once so the first soft kill is synchronous.
+		void resolveKiller();
 		if (state.warnings.length > 0) {
 			ui.notify(
 				`pi-hang-guard: ${state.warnings.length} config problem(s) in ${state.configPath}\n- ${state.warnings.join("\n- ")}`,

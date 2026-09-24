@@ -26,8 +26,10 @@ pi（pi-coding-agent）的命令执行看门狗：监听工具执行事件，用
 | `classify.ts` | 命令分类与归一化（纯正则/字符串） |
 | `config.ts` | 配置加载、字段校验、环境变量覆盖（纯函数，可注入读取器） |
 | `format.ts` | 状态栏与通知文案格式化（纯字符串） |
-| `tests/` | 四个套件，51 个用例，`node --test` 原生 TS 类型擦除 |
-| `scripts/verify-live-rpc.mjs` | 真实 pi 进程端到端验证（不发布） |
+| `tests/` | 五个套件，71 个用例，`node --test` 原生 TS 类型擦除 |
+| `tests/escalation.test.ts` | 处置阶梯的单测（模式、冷却、续跑上限、软杀降级、报告文本） |
+| `scripts/verify-live-rpc.mjs` | 真实 pi 进程端到端验证，支持 `observe\|guard\|yolo` 三模式（不发布） |
+| `scripts/sync-version.mjs` | `npm version` 时同步 `index.ts` 的 `VERSION` 常量 |
 | `.github/workflows/publish.yml` | npm Trusted Publishing 自动发布 |
 
 无构建步骤、无测试框架依赖、**无任何运行时依赖**（peer deps 由 pi 宿主解析）。
@@ -120,6 +122,41 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 
 `maxNotificationsPerCall`（默认 2 = 警告 + 严重）按**每次工具调用**计数，不计入「结束汇报」。设为 1 会连严重提醒一起省掉，这是使用者的选择，不是缺陷。
 
+## 处置（升级阶梯）
+
+探测得出严重等级（level 2）后，`engine.escalate()` 按 `mode` 决定动作。**动作能力由宿主注入**（`GuardDeps.actions`）：不注入就永远不会动作，引擎本身不碰 pi API。
+
+| 级 | 动作 | 实现 | 对话 |
+| --- | --- | --- | --- |
+| L0 | 提醒 | `ui.notify` / `ui.setStatus` | 继续 |
+| L1 | 软杀已登记子进程 | 宿主动态 import `dist/utils/shell.js` 的 `killTrackedDetachedChildren()` | **继续**（工具以 `128+signal` 返回） |
+| L1' | 中止本轮 | `ctx.abort()` | 结束 |
+| L2 | 自动续跑 | `agent_settled` → `pi.sendMessage(…, { triggerTurn: true })` | 开新 run |
+
+**L1 优先于 L1'**：软杀后子进程非零退出，`bash` 工具产出的是一条普通失败结果，turn 不中断，模型当场就能接着处理；`ctx.abort()` 会结束整轮且不会自动继续（`_agentRunAbortRequested` 阻断了续跑）。
+
+### L1 为何在官方安装上不可用（实测结论）
+
+`package.json` 的 `bin.pi` 指向 **`dist/bundle/cli.js`（打包构建）**，打包后的 `dist/bundle/chunks/*.js` **没有任何 export**（`grep -c '^export' chunks/*.js` 全为 0）。于是：
+
+- bash 工具用的 `trackedDetachedChildPids` 在 chunk 模块里；
+- 我们从 `dist/utils/shell.js` 动态 import 得到的是**另一份模块实例**，它的集合永远是空的；
+- `killTrackedDetachedChildren()` 会“成功”返回却什么都没杀——**静默失效**（2026-09-24 的 RPC 实测：报了软杀成功，工具又活了 15s 才被 abort 干掉）。
+
+因此宿主在 `resolveKiller()` 里先用 `process.argv[1]` 探测打包入口（`/[\\/]bundle[\\/][^\\/]*\.js$/`），命中就不假装有能力：`softKill()` 返回 `{ok:false}`，`yolo` 立即降级为中止，报告里写明 `soft kill unavailable: this pi is the bundled build…`。**能干什么就说能干，不能就说不能**——报假成功比不做事更糟。
+
+### 护栏
+
+| 护栏 | 实现 |
+| --- | --- |
+| 每会话最多续跑 `maxAutoResumes` 次 | `queueResume()` 计数，超了只记录不排队 |
+| 两次动作最小间隔 `actionCooldownSec` | `nextActionAt` |
+| 同一工具只处置一次 | `entry.abortRequested` / `entry.softKilledAt` |
+| 只有自己发起的断才续跑 | 只有 `abortTurn()` 会 `queueResume()`；用户 Esc 走的不是这条路径 |
+| 无 UI 模式默认不续跑 | 送信前检查 `ctx.hasUI \|\| config.resumeWithoutUI` |
+| 软杀宽限期后升级 | 每个 tick 重新评估 `entry.softKilledAt`，所以 `escalate()` 在 level 2 的**每次** tick 都要跑，不能只在跃迁时跑 |
+| 从 `agent_settled` 起新 run 必须 `setTimeout(…, 0)` | 它是在 `_runAgentPrompt` 的 finally 里同步 emit 的 |
+
 ## 配置解析契约
 
 优先级由低到高：默认值 → 配置文件 → `PI_WATCHDOG_*` → `PI_GUARD_*`。
@@ -141,7 +178,7 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 ## 测试策略
 
 ```bash
-npm test                                   # 51 个用例
+npm test                                   # 71 个用例
 PI_SDK_ENTRY=/path/to/@earendil-works/pi-coding-agent/dist/index.js npm test   # 额外启用真实加载器用例
 ```
 
@@ -150,7 +187,8 @@ PI_SDK_ENTRY=/path/to/@earendil-works/pi-coding-agent/dist/index.js npm test   #
 | `tests/classify.test.ts` | 分类与归一化；含反例 `echo 'npm run dev'`、`git commit -m`、`docker run -d` 不得误判为 watcher/interactive |
 | `tests/config.test.ts` | 默认值、坏 JSON、类型错误、越界钳制、env 优先级、旧变量兼容、不可变性、`configPathFor` |
 | `tests/engine.test.ts` | 静默触发/不触发、非流式走挂钟、self-timed、白名单抬高、并发隔离、状态无条件清理、UI 冻结位移、通知配额、状态文案去重、UI 抛错不破坏记账 |
-| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 依赖、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
+| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 静态依赖、observe/guard 两条端到端链路、**打包版软杀诚实降级**、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
+| `tests/escalation.test.ts` | 三种模式的行为、动作幂等性、冷却、续跑上限、软杀宽限期与 pending 重试、软杀不可用降级、无 actions 宿主不崩、abort 抛错不破记账、动作日志与报告文本 |
 
 **测试抓出过的真 bug（都已修，勿回退）：**
 
@@ -160,19 +198,20 @@ PI_SDK_ENTRY=/path/to/@earendil-works/pi-coding-agent/dist/index.js npm test   #
 
 ### 真实 RPC 验证
 
-单测用注入时钟，**无法证明 pi 真实事件顺序符合预期**。`scripts/verify-live-rpc.mjs` 补这一段：以 `pi --mode rpc` 启动真实会话（RPC 模式下 `setStatus`/`notify` 变成可观测的 `extension_ui_request` 事件），把阈值压到 2s/4s，让模型跑 `sleep 9`，断言产生了状态与通知、且工具结束时状态被清空。会消耗一次模型调用。
+单测用注入时钟，**无法证明 pi 真实事件顺序符合预期**。`scripts/verify-live-rpc.mjs` 补这一段：以 `pi --mode rpc` 启动真实会话（RPC 模式下 `setStatus`/`notify` 变成可观测的 `extension_ui_request` 事件），把阈值压到 2s/4.5s，让模型跑 `sleep 25`，再按模式断言。
 
-已验证输出（节选）：
+```bash
+node scripts/verify-live-rpc.mjs                    # 测已安装的扩展
+node scripts/verify-live-rpc.mjs guard --ext ./index.ts   # 只加载指定入口（-ne + -e）
+```
 
-```
-[guard:call_00_ET_82...] ⏱ bash · 2s 无输出 · one-shot · sleep 9
-[guard:call_00_ET_82...] ⚠ bash · 4s 无输出 · one-shot · sleep 9 · 仅提醒
-[guard:call_00_ET_82...] <cleared>
-(warning) bash 2s 无输出（one-shot）| 命令: sleep 9 | 可能卡住…按 Esc 中断。
-(error)   bash 4s 无输出（超过 4s 阈值）| 疑似卡死。当前为观察模式，不会自动中断…
-(info)    bash 最终完成（耗时 9s，最长静默 9s）
-RESULT: guardFired=true statusCleared=true
-```
+`--ext` 必须带 `-ne`：否则会和已安装的同名扩展**flag 冲突**导致启动失败。
+
+已验证输出（2026-09-24，pi 0.86.0，Windows）：
+
+- `observe`：只有提醒，`agent_start=1`，无动作
+- `guard`：5s 触发 `已中止本轮对话（将自动续跑 1/1）`，`agent_start=2`，报告投递成功；**模型收到报告后自己把阻塞 `sleep` 换成了后台轮询**
+- `yolo`：探测到打包构建 → 无假成功提示，5s 直接中止，报告含 `soft kill unavailable: this pi is the bundled build…`
 
 ## 本地开发与发布
 
@@ -239,22 +278,13 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 
 ## 路线图
 
-**0.1.x（当前）**：非侵入观察——静默检测、命令分类、UI 冻结、`/guard`。
+**0.1.x**：非侵入观察——静默检测、命令分类、UI 冻结、`/guard`。
 
-**0.2 分级处置**（需先确认，破坏性能力默认关闭）：
+**0.2.x（当前）**：分级处置——`guard` 中止本轮 + 结构化报告自动续跑；`yolo` 尝试软杀（仅非打包构建生效，会自动降级）。默认仍是 `observe`。
 
-| 级 | 动作 | 机制 | 代价 |
-| --- | --- | --- | --- |
-| L0 | 提醒 | 现有实现 | 无 |
-| L1 | 软杀已登记子进程 | pi 内部 `killTrackedDetachedChildren()` | 作用域全局（会连带 `!` 命令与并发 shell） |
-| L1' | `ctx.abort()` | 官方 API | turn 级：同批工具一起死，且在途 LLM 流也停 |
-| L2 | 自动续跑 | `agent_settled` + `pi.sendMessage(…, { triggerTurn: true })` | 需要护栏 |
+**0.3（待定）**：致命模式检测。仅 watcher 类、仅在启动窗口（约 3s）内匹配不可自愈的错误（`Pre-transform error`、`MODULE_NOT_FOUND`、`EADDRINUSE`…）。**明确排除** `error TS\d+`、`ERROR in`、`warning`——它们在 watch 循环里是常态且可自愈，纳入即误杀。
 
-**L1 优先于 L1' 的理由**：软杀后子进程以非零退出码返回，`bash` 工具产出的是一条普通的「命令失败」结果，**turn 不中断**，模型能当场接着处理；`ctx.abort()` 会结束整轮且不会自动继续。
-
-**L2 必须有的护栏**：只对**我们自己发起**的中断续跑（用户按 Esc 触发的绝不续跑）；用 `setTimeout(…, 0)` 跳出 `agent_settled` 的同步调用栈（从 `_runAgentPrompt` 的 finally 里再起 run 是重入）；每轮最多续跑 `maxAutoResumes` 次；`hasUI === false`（print/json 模式）时默认不续跑。
-
-**0.3 致命模式检测**：仅 watcher 类、仅在启动窗口（约 3s）内匹配不可自愈的错误（`Pre-transform error`、`MODULE_NOT_FOUND`、`EADDRINUSE`…）。**明确排除** `error TS\d+`、`ERROR in`、`warning`——它们在 watch 循环里是常态且可自愈，纳入即误杀。
+**其他候选**：watcher 类命令自动后台化（需要覆盖 bash 工具的 `operations`，已有完整设计）；用 OS 级进程发现实现不依赖 pi 内部注册表的软杀。
 
 ## pi 实现约束速查表
 
@@ -274,6 +304,8 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 | abort 后 `_agentRunAbortRequested` 阻止自动继续 | 需要 L2 主动开新一轮 | `dist/core/agent-session.js:872,883-886` |
 | `agent_settled` 在 `_runAgentPrompt` 的 finally 中同步 emit | 从其中起新 run 是重入，必须 `setTimeout(…, 0)` | `dist/core/agent-session.js:367-377,877` |
 | package `exports` 只暴露 `.` / `./rpc-entry` / `./client` / `./experimental/plugin` | 深路径 import 会被拦；`getPackageDir()` 是唯一出口 | `package.json#exports` |
+| `bin.pi` = `dist/bundle/cli.js`，且打包 chunk **不导出任何东西** | 内部进程注册表在打包安装上不可达 → 软杀必须探测并降级 | `package.json#bin`、`dist/bundle/chunks/*.js` |
+| 两个扩展注册同名 flag 会让 pi **拒绝加载**后一个 | 本地源码与 npm 包同时安装会启动报错（不是静默双加载） | 实测报错：`Flag "--no-guard" conflicts with …` |
 
 ## 决策记录
 
@@ -284,5 +316,8 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 | 2026-09-24 | UI 提示期间冻结计时 | `tool_execution_start` 早于权限弹窗 |
 | 2026-09-24 | 状态栏 key 用 `guard:${toolCallId}`，结束时无条件清理 | 修复并发覆盖与状态残留两个真实缺陷 |
 | 2026-09-24 | 0.1.x 不含任何处置动作 | 先观察、先降误报，破坏性能力单独评估 |
+| 2026-09-24 | 0.2 默认仍为 `observe`；处置需显式开 `guard` | 破坏性行为不能默认上线；`guard` 用官方 API，`yolo` 才碰内部实现 |
+| 2026-09-24 | 软杀改为「能力探测 + 诚实降级」 | RPC 实测抓出假成功：报软杀成功却什么都没杀（打包构建的私有注册表），误导性比不做更糟 |
+| 2026-09-24 | 续跑只认自己发起的中断 | 用户按 Esc 是明确意图，绝不能被自动续跑覆盖 |
 | 2026-09-24 | 入口只允许 `import type` 引用 SDK | 保证可在无 pi 进程内加载与测试 |
 | 2026-09-24 | 文档分工：README 面向使用者，AGENTS.md 面向维护者 | 与 `pi-footer-styler` 保持同一套约定 |

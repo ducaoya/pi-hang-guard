@@ -17,8 +17,10 @@ import { join } from "node:path";
 
 import type { ClassifyRules } from "./classify.ts";
 
-/** Only "observe" ships in 0.1.x. Escalation modes are reserved. */
-export type GuardMode = "observe";
+/** Escalation mode. `observe` never touches a running tool. */
+export type GuardMode = "observe" | "guard" | "yolo";
+
+const GUARD_MODES: readonly GuardMode[] = ["observe", "guard", "yolo"];
 
 export interface GuardClassifyConfig extends ClassifyRules {
 	extraWatcher: string[];
@@ -44,7 +46,16 @@ export interface GuardConfig {
 	/** Wall-clock seconds before a warning. Non-streaming tools and self-timed commands. */
 	runtimeWarnSec: number;
 	runtimeCriticalSec: number;
+	/** Notification budget per tool call (1 suppresses the critical tier). */
 	maxNotificationsPerCall: number;
+	/** Seconds to wait after a soft kill before escalating to aborting the turn. */
+	softKillGraceSec: number;
+	/** Maximum automatic turn resumptions per session. `0` disables resuming. */
+	maxAutoResumes: number;
+	/** Minimum seconds between two automatic actions. */
+	actionCooldownSec: number;
+	/** Allow resuming turns in modes without a UI (`-p`, `--mode json`). */
+	resumeWithoutUI: boolean;
 	showStatusBar: boolean;
 	notifyOnCompletion: boolean;
 	/** How often the guard re-evaluates running tools. */
@@ -63,6 +74,10 @@ export const DEFAULT_CONFIG: GuardConfig = {
 	runtimeWarnSec: 180,
 	runtimeCriticalSec: 600,
 	maxNotificationsPerCall: 2,
+	softKillGraceSec: 15,
+	maxAutoResumes: 1,
+	actionCooldownSec: 60,
+	resumeWithoutUI: false,
 	showStatusBar: true,
 	notifyOnCompletion: true,
 	tickIntervalMs: 1000,
@@ -169,12 +184,10 @@ export function mergeConfig(base: GuardConfig, patch: unknown): { config: GuardC
 	config.notifyOnCompletion = readBoolean(patch, "notifyOnCompletion", config.notifyOnCompletion, warnings);
 
 	if (patch.mode !== undefined) {
-		if (patch.mode === "observe") {
-			config.mode = "observe";
-		} else if (patch.mode === "guard" || patch.mode === "yolo") {
-			warnings.push(`mode "${String(patch.mode)}" is not implemented in this version; falling back to "observe"`);
+		if (GUARD_MODES.includes(patch.mode as GuardMode)) {
+			config.mode = patch.mode as GuardMode;
 		} else {
-			warnings.push(`unknown mode "${String(patch.mode)}"; keeping "observe"`);
+			warnings.push(`unknown mode "${String(patch.mode)}"; keeping "${config.mode}"`);
 		}
 	}
 
@@ -191,6 +204,19 @@ export function mergeConfig(base: GuardConfig, patch: unknown): { config: GuardC
 		min: 1,
 		max: 100,
 	});
+	config.softKillGraceSec = readNumber(patch, "softKillGraceSec", config.softKillGraceSec, warnings, {
+		min: 0,
+		max: 3_600,
+	});
+	config.maxAutoResumes = readNumber(patch, "maxAutoResumes", config.maxAutoResumes, warnings, {
+		min: 0,
+		max: 10,
+	});
+	config.actionCooldownSec = readNumber(patch, "actionCooldownSec", config.actionCooldownSec, warnings, {
+		min: 0,
+		max: 86_400,
+	});
+	config.resumeWithoutUI = readBoolean(patch, "resumeWithoutUI", config.resumeWithoutUI, warnings);
 	config.tickIntervalMs = readNumber(patch, "tickIntervalMs", config.tickIntervalMs, warnings, {
 		min: 20,
 		max: 600_000,
@@ -253,14 +279,31 @@ function applyEnv(config: GuardConfig, env: NodeJS.ProcessEnv, warnings: string[
 	if (on === "1" || on === "true") config.enabled = true;
 
 	const mode = env.PI_GUARD_MODE;
-	if (mode !== undefined && mode !== "" && mode !== "observe") {
-		warnings.push(`PI_GUARD_MODE="${mode}" is not implemented in this version; falling back to "observe"`);
+	if (mode !== undefined && mode !== "" && !GUARD_MODES.includes(mode as GuardMode)) {
+		warnings.push(`PI_GUARD_MODE="${mode}" is not a known mode; ignoring it`);
+	} else if (mode) {
+		config.mode = mode as GuardMode;
 	}
 
 	config.idleWarnSec = envNumberToSec(env, "PI_GUARD_IDLE_WARN_MS", config.idleWarnSec, warnings);
 	config.idleCriticalSec = envNumberToSec(env, "PI_GUARD_IDLE_CRITICAL_MS", config.idleCriticalSec, warnings);
 	config.runtimeWarnSec = envNumberToSec(env, "PI_GUARD_RUNTIME_WARN_MS", config.runtimeWarnSec, warnings);
 	config.runtimeCriticalSec = envNumberToSec(env, "PI_GUARD_RUNTIME_CRITICAL_MS", config.runtimeCriticalSec, warnings);
+	config.softKillGraceSec = envNumberToSec(env, "PI_GUARD_SOFT_KILL_GRACE_MS", config.softKillGraceSec, warnings);
+	config.actionCooldownSec = envNumberToSec(env, "PI_GUARD_ACTION_COOLDOWN_MS", config.actionCooldownSec, warnings);
+
+	const maxResumes = env.PI_GUARD_MAX_AUTO_RESUMES;
+	if (maxResumes !== undefined && maxResumes !== "") {
+		const value = Number(maxResumes);
+		if (!Number.isFinite(value) || value < 0 || value > 10) {
+			warnings.push("PI_GUARD_MAX_AUTO_RESUMES must be a number between 0 and 10; ignoring it");
+		} else {
+			config.maxAutoResumes = value;
+		}
+	}
+	if (env.PI_GUARD_RESUME_WITHOUT_UI === "1" || env.PI_GUARD_RESUME_WITHOUT_UI === "true") {
+		config.resumeWithoutUI = true;
+	}
 	const tickRaw = env.PI_GUARD_TICK_MS;
 	if (tickRaw !== undefined && tickRaw !== "") {
 		const tick = Number(tickRaw);
