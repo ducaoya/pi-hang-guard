@@ -135,7 +135,7 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 - `package.json` 的 `files` 决定发布内容；**新增源文件必须同步加入**
 - `pi.extensions: ["./index.ts"]` 是唯一入口
 - **`index.ts` 只允许 `import type` 引用 pi SDK**，不允许运行时 import。理由：这样入口可在无 pi 的进程里直接加载和测试（打包测试会断言这一点）
-- 入口里的 `VERSION` 常量必须与 `package.json` 的 `version` 一致——有专门用例把关，改版本时两处同改
+- 入口里的 `VERSION` 常量必须与 `package.json` 的 `version` 一致。由 `tests/packaging.test.ts` 断言把关；`scripts/sync-version.mjs` 经 npm 的 `version` 生命周期脚本（`scripts.version`）在 `npm version` 时自动同步并 `git add`，所以发版无需手工改两处。**手工改版本号时仍必须两处同改。**
 - `peerDependencies` 声明 `@earendil-works/pi-coding-agent: "*"`，不打包 peer deps
 
 ## 测试策略
@@ -197,6 +197,8 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
   npm version patch -m "[release] %s"     # 或 minor / major
   git push origin master --follow-tags
   ```
+
+  `npm version` 会自动：bump `package.json` → 跑 `scripts.version`（同步 `index.ts` 的 `VERSION` 并暂存）→ 生成 `[release] x.y.z` 提交与 `vX.Y.Z` 标签。缺了同步脚本，CI 的 `npm test` 会因版本不一致而失败。
 
 - 一次性前置配置（npm 网页，代码无法代做）：包页 → Settings → Trusted Publisher → GitHub Actions，填 `ducaoya` / `pi-hang-guard` / `publish.yml`
 - workflow 行为：升级 npm → 用 `npm view` 查重（该版本已存在则跳过）→ `npm publish --provenance --access public`
