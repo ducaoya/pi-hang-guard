@@ -18,7 +18,7 @@ import { DEFAULT_CONFIG, loadConfig, type GuardConfig } from "./config.ts";
 import { createGuardEngine, type GuardUI } from "./engine.ts";
 import { formatDuration, previewCommand } from "./format.ts";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 
 export default function commandGuard(pi: ExtensionAPI): void {
 	pi.registerFlag("no-guard", {
