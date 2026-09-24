@@ -1,0 +1,44 @@
+{
+	"name": "pi-hang-guard",
+	"version": "0.1.0",
+	"description": "Detects hung shell commands in pi by watching for missing output heartbeats, so a stuck command warns you instead of silently waiting forever.",
+	"license": "MIT",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"extension",
+		"watchdog",
+		"hang",
+		"timeout",
+		"bash"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ducaoya/pi-hang-guard.git"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"files": [
+		"index.ts",
+		"config.ts",
+		"classify.ts",
+		"engine.ts",
+		"format.ts",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"scripts": {
+		"test": "node --test tests/packaging.test.ts tests/classify.test.ts tests/config.test.ts tests/engine.test.ts",
+		"test:watch": "node --test --watch tests/engine.test.ts"
+	}
+}
