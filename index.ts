@@ -25,7 +25,7 @@ import {
 } from "./engine.ts";
 import { formatDuration, previewCommand, resumeMessage } from "./format.ts";
 
-const VERSION = "0.1.2";
+const VERSION = "0.2.0";
 
 function extractOutputText(partialResult: unknown): string {
 	if (typeof partialResult !== "object" || partialResult === null) return "";

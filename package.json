@@ -1,6 +1,6 @@
 {
 	"name": "pi-hang-guard",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"description": "Detects hung shell commands in pi by watching for missing output heartbeats, so a stuck command warns you instead of silently waiting forever.",
 	"license": "MIT",
 	"type": "module",
