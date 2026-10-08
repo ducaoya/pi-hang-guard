@@ -22,7 +22,8 @@ bash 2m30s 无输出（超过 150s 阈值，server/watch）
 # 从 npm
 pi install npm:pi-hang-guard
 
-# 从 git（默认分支最新；要锁版本就加 tag，如 @v0.2.1）
+# 从 git（默认分支最新；要锁版本就在末尾加 tag，名称见
+# https://github.com/ducaoya/pi-hang-guard/tags ）
 pi install git:github.com/ducaoya/pi-hang-guard
 
 # 从本地目录（开发调试，不复制源码）
