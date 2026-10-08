@@ -27,7 +27,7 @@ import {
 import { observationText, previewCommand, resumeMessage } from "./format.ts";
 import { messagesFor } from "./i18n.ts";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 function extractOutputText(partialResult: unknown): string {
 	if (typeof partialResult !== "object" || partialResult === null) return "";
