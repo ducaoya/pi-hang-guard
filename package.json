@@ -1,7 +1,7 @@
 {
 	"name": "pi-hang-guard",
 	"version": "0.3.0",
-	"description": "Watchdog for the pi coding agent: detects hung bash commands by output silence and warns you instead of waiting forever.",
+	"description": "Watchdog for the pi coding agent: detects bash commands that produce no output (hung builds, silently stuck dev servers) and warns you instead of waiting forever.",
 	"license": "MIT",
 	"type": "module",
 	"keywords": [
