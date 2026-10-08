@@ -1,39 +1,41 @@
 # pi-hang-guard
 
-给 [pi](https://pi.dev) 的命令执行看门狗：**命令停止输出时主动提醒你**，而不是让你对着一个卡死的进程干等。
+**English** · [中文文档](./README.zh-CN.md)
 
-pi 的 `bash` 工具默认没有超时，且只按退出码判断成败。于是「进程还活着但已经失败」的场景（dev server 编译报错、watcher 遇到语法错误、构建在等 stdin、网络请求挂起）永远等不到失败信号，pi 就一直等下去，你也不知道里面发生了什么。
+A command watchdog for [pi](https://pi.dev): **it warns you when a command stops producing output**, instead of leaving you staring at a process that will never print anything again.
 
-本插件用**静默**作为判据来补这个缺口：它读取 pi 的流式工具事件，因此对 `bash` 能精确知道进程最后一次输出是什么时候。**静默 90 秒是真的信号，「已经跑了 90 秒」不是。**
+pi's `bash` tool has no default timeout and only judges success by exit code. So the worst case — "the process is alive but already broken" — never produces a failure signal. A dev server that failed to compile, a watcher that hit a syntax error, a build waiting on stdin, a request that hung on the network: pi keeps waiting and you have no idea what is going on.
 
-```
-⏱ bash 1m30s 无输出 · server/watch · npm run dev
-```
+This extension closes that gap by using **silence** as the signal. It reads pi's streaming tool events, so for `bash` it knows exactly when the process last produced output. **90 seconds of silence is a real signal. "It has been running for 90 seconds" is not.**
 
 ```
-bash 2m30s 无输出（超过 150s 阈值，server/watch）
-命令: npm run dev
-疑似卡死。当前为观察模式（observe），不会自动中断；按 Esc 手动中断。
+⏱ bash 1m30s idle · server/watch · npm run dev
 ```
 
-## 安装
+```
+bash 2m30s idle (over the 150s threshold, server/watch)
+command: npm run dev
+Likely stuck. Running in observe mode, so nothing is interrupted automatically — press Esc to interrupt.
+```
+
+## Install
 
 ```bash
-# 从 npm
+# from npm
 pi install npm:pi-hang-guard
 
-# 从 git（默认分支最新；要锁版本就在末尾加 tag，名称见
-# https://github.com/ducaoya/pi-hang-guard/tags ）
+# from git (tracks the default branch; append a tag to pin a version, see
+# https://github.com/ducaoya/pi-hang-guard/tags )
 pi install git:github.com/ducaoya/pi-hang-guard
 
-# 从本地目录（开发调试，不复制源码）
+# from a local directory (development, sources are not copied)
 pi install /absolute/path/to/pi-hang-guard
 
-# 不安装，试用一次
+# try it without installing
 pi -e /absolute/path/to/pi-hang-guard
 ```
 
-也可以直接写进 `~/.pi/agent/settings.json`：
+Or add it directly to `~/.pi/agent/settings.json`:
 
 ```json
 {
@@ -41,104 +43,106 @@ pi -e /absolute/path/to/pi-hang-guard
 }
 ```
 
-装完重启 pi，或执行 `/reload`。
+Restart pi afterwards, or run `/reload`.
 
-卸载：
+Uninstall:
 
 ```bash
-pi remove pi-hang-guard     # 或 pi remove /absolute/path/to/pi-hang-guard
+pi remove pi-hang-guard     # or pi remove /absolute/path/to/pi-hang-guard
 ```
 
-## 用法
+## Usage
 
-### 它做什么、不做什么
+### What it does and does not do
 
-**默认是纯观察模式**（`mode: "observe"`）：只监控和提醒，不杀进程、不中断对话。只有显式开启 `guard` / `yolo` 后，严重阈值到达时才会中止本轮对话（`yolo` 还会先尝试软杀子进程），详见下文「自动处置」。
+**The default is pure observation** (`mode: "observe"`): it watches and warns, never kills a process, never aborts a turn. Only after you explicitly enable `guard` / `yolo` will it abort the turn once the critical threshold is reached (`yolo` also tries a soft kill first) — see [Automatic action](#automatic-action-02-default-off) below.
 
-**所有模式下都不覆盖内置工具、不改写你的命令、不碰工具事件里的输入**——它只读事件。即使它自身出错，最坏结果也只是一条错误提醒。
+**In every mode it never overrides a built-in tool, never rewrites your command, and never touches the input of a tool event** — it only reads events. If it fails, the worst case is one bad notification.
 
-### 什么情况会提醒
+### When it warns
 
-| 情况 | 是否提醒 |
+| Situation | Warns? |
 | --- | --- |
-| `bash` 命令连续无输出超过阈值（默认警告 90s / 严重 150s） | ✅ |
-| 非流式工具（`read`/`write`/`edit`/`grep`/`find`/`ls`）运行超过阈值（默认 180s / 600s） | ✅ |
-| 已知慢命令（`docker build`、`npm ci`、`git clone`、`cargo build`…） | ✅ 阈值提高到 300s / 600s |
-| 命令自带超时（`timeout 600 …`、`--timeout 30`） | ⏭️ 改按运行时长判断 |
-| 一边跑一边有输出（6 分钟的构建持续打日志） | ❌ 不提醒 |
-| 交互式命令（`vim`、`less`、`grep` 分页、`git rebase -i`、`git add -p`、`npm login`、`docker exec -it`、裸 `ssh`） | ⏭️ 完全不守护 |
-| pi 正在等你确认（权限弹窗、选择器） | ❌ 计时冻结，不算卡死 |
+| A `bash` command produced no output for longer than the threshold (default 90s warning / 150s critical) | ✅ |
+| A non-streaming tool (`read`/`write`/`edit`/`grep`/`find`/`ls`) ran longer than its threshold (default 180s / 600s) | ✅ |
+| A known-slow command (`docker build`, `npm ci`, `git clone`, `cargo build`…) | ✅ with raised thresholds (300s / 600s) |
+| A command that bounds itself (`timeout 600 …`, `--timeout 30`) | ⏭️ measured by wall-clock runtime instead |
+| Output keeps flowing (a 6-minute build that keeps logging) | ❌ never |
+| Interactive commands (`vim`, `less`, `grep` paging, `git rebase -i`, `git add -p`, `npm login`, `docker exec -it`, bare `ssh`) | ⏭️ not watched at all |
+| pi is waiting for you (permission dialog, selector) | ❌ the clock freezes, this is not a hang |
 
-### 命令
+### Commands
 
-| 命令 | 作用 |
+| Command | Effect |
 | --- | --- |
-| `/guard` 或 `/guard status` | 查看模式、正在运行的工具、阈值、已执行的动作、配置文件路径、配置告警 |
-| `/guard on` / `/guard off` | 本次会话启用 / 停用 |
-| `/guard reload` | 重新读取配置文件 |
+| `/guard` or `/guard status` | Show mode, locale, running tools, thresholds, actions taken, config path, config warnings |
+| `/guard on` / `/guard off` | Enable / disable for this session |
+| `/guard reload` | Re-read the config file |
 
-单次运行禁用：
+Disable for a single run:
 
 ```bash
 pi --no-guard
 ```
 
-### 自动处置（0.2 起，默认关闭）
+## Automatic action (0.2+, default off)
 
-默认是**纯观察**（`mode: "observe"`），只提醒不动手。开启后，静默超过**严重阈值**时按模式处置：
+The default is **pure observation** (`mode: "observe"`): it only warns and does nothing else. Once enabled, a tool whose silence crosses the **critical** threshold is handled according to the mode:
 
-| mode | 严重阈值到达后 | 对话是否继续 |
+| mode | When the critical threshold is reached | Does the conversation continue? |
 | --- | --- | --- |
-| `observe`（默认） | 只提醒 | 继续等待 |
-| **`guard`（推荐）** | 中止本轮对话（`ctx.abort()`） | 否，但会自动开新一轮把**结构化报告**交给模型继续处理 |
-| `yolo` | 先尝试杀掉已登记的子进程；不行或宽限期过后再中止对话 | 软杀成功则继续；否则同 `guard` |
+| `observe` (default) | only warns | yes, it keeps waiting |
+| **`guard` (recommended)** | aborts the turn (`ctx.abort()`) | no, but a new run is started automatically with a **structured report** so the model can keep working |
+| `yolo` | first tries to kill the already-tracked child processes; if that fails, or after the grace period, aborts the turn | yes if the soft kill worked, otherwise like `guard` |
 
-开启方式（任选）：
+Enable it (either way):
 
 ```bash
-# 一次性
+# for one run
 PI_GUARD_MODE=guard pi
 
-# 持久化
+# permanently
 ```
 
 ```json
 { "mode": "guard" }
 ```
 
-**自动续跑的护栏**（不会失控）：
+**Guardrails on the auto-resume** (it cannot run away):
 
-- 每会话最多 `maxAutoResumes`（默认 1）次
-- 两次动作之间至少间隔 `actionCooldownSec`（默认 60s）
-- 同一个工具只处置一次
-- 只有**我们自己发起**的中断才会续跑；你按 **Esc** 中止的绝不续跑
-- `-p` / `--mode json` 等无 UI 模式默认不续跑（`resumeWithoutUI` 可开）
+- at most `maxAutoResumes` (default 1) per session
+- at least `actionCooldownSec` (default 60s) between two actions
+- each tool is handled once
+- only **interrupts this extension initiated** are resumed; if you press **Esc**, nothing is ever resumed for you
+- modes without a UI (`-p`, `--mode json`) do not resume by default (`resumeWithoutUI` turns that on)
 
-**报告长这样**（模型据此继续）：
+**The report looks like this** (the model continues from it):
 
 ```
-[pi-hang-guard] 已自动处置一个疑似卡死的命令
-动作: 中止本轮对话（第 1/1 次自动续跑，mode=guard）
-原因: bash 3m12s 无输出（超过 150s 阈值，server/watch）
-命令: npm run dev
-已收集的输出尾部:
+[pi-hang-guard] automatically handled a command that looked stuck
+
+action: aborted the turn (auto-resume 1/1, mode=guard)
+reason: bash 3m12s idle (over the 150s threshold, server/watch)
+command: npm run dev
+captured output tail:
 …
-请继续处理：先判断该命令是在等待输入、网络挂起，还是本身就是 dev/watch 服务；
-若是服务类命令，改用后台运行并轮询日志，不要在前台阻塞。
+
+Continue now. First decide whether the command is waiting for input, stalled on the network, or is itself a dev/watch service. If it is a service, run it in the background and poll its log instead of blocking the foreground.
 ```
 
-> **关于 `yolo` 的能力边界**：软杀依赖 pi 的内部进程注册表，而官方安装的 pi 是**打包构建**（`bin` 指向 `dist/bundle/cli.js`，chunk 不导出任何东西），此时那个注册表是一份私有副本，杀不动任何进程。插件会**主动探测**这种情况并直接降级为中止对话（报告里会写明原因），**不会假称软杀成功**。只有从源码运行 pi 时软杀才真正生效。
+> **About the limits of `yolo`**: the soft kill relies on pi's internal process registry, but an officially installed pi is the **bundled build** (`bin` points at `dist/bundle/cli.js`, whose chunks export nothing). The registry there is a private copy, so the soft kill cannot reach any process. The extension **detects this** and degrades straight to aborting the turn, stating the reason in the report (`soft kill unavailable: …`). It never claims a soft kill it did not perform. The soft kill is only real when pi runs from source.
 
-## 配置
+## Configuration
 
-配置文件：`~/.pi/agent/hang-guard.json`（可用 `$PI_CODING_AGENT_DIR` 改目录，或用 `$PI_GUARD_CONFIG` 直接指定文件）。
+Config file: `~/.pi/agent/hang-guard.json` (change the directory with `$PI_CODING_AGENT_DIR`, or point at a file with `$PI_GUARD_CONFIG`).
 
-**配置缺失或写坏不会影响任何工具调用**：回退到默认值并给出一条告警。
+**A missing or broken config never affects a tool call**: the guard falls back to defaults and reports a warning.
 
 ```json
 {
   "enabled": true,
   "mode": "observe",
+  "locale": "en",
   "idleWarnSec": 90,
   "idleCriticalSec": 150,
   "idleWhitelistWarnSec": 300,
@@ -162,62 +166,80 @@ PI_GUARD_MODE=guard pi
 }
 ```
 
-| 键 | 默认值 | 说明 |
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | 总开关 |
-| `mode` | `"observe"` | `observe` / `guard` / `yolo`，见上节 |
-| `idleWarnSec` | `90` | 静默多久给出警告 |
-| `idleCriticalSec` | `150` | 静默多久给出严重提醒（也是触发处置的阈值） |
-| `idleWhitelistWarnSec` / `idleWhitelistCriticalSec` | `300` / `600` | 已知慢命令（`docker build`、`npm ci`、`git clone`…）专用的抬高阈值 |
-| `runtimeWarnSec` / `runtimeCriticalSec` | `180` / `600` | 非流式工具、自带超时命令的挂钟阈值 |
-| `maxNotificationsPerCall` | `2` | 每个工具调用的通知配额（设为 1 会连严重提醒一起省掉） |
-| `softKillGraceSec` | `15` | `yolo` 下软杀后等多久才升级为中止对话 |
-| `maxAutoResumes` | `1` | 每会话最多自动续跑几次（`0` = 只中止不续跑） |
-| `actionCooldownSec` | `60` | 两次自动动作的最小间隔 |
-| `resumeWithoutUI` | `false` | 是否允许在无 UI 模式（`-p`/`json`）下自动续跑 |
-| `showStatusBar` | `true` | 在底栏显示被标记工具的实时计数器 |
-| `notifyOnCompletion` | `true` | 之前被提醒过的工具结束时汇报结果 |
-| `tickIntervalMs` | `1000` | 重新判定的间隔 |
-| `streamingTools` | `["bash"]` | 会发出流式事件的工具（静默检测只对这些生效） |
-| `classify.extraWatcher` / `extraInteractive` / `idleWhitelist` | `[]` | 扩展内置清单；写错的正则会被忽略，不会报错 |
+| `enabled` | `true` | Master switch |
+| `mode` | `"observe"` | `observe` / `guard` / `yolo`, see above |
+| `locale` | `"en"` | Language of every message the guard shows you: `en` or `zh` |
+| `idleWarnSec` | `90` | How long without output before a warning |
+| `idleCriticalSec` | `150` | How long without output before the critical alert (also the threshold that triggers action) |
+| `idleWhitelistWarnSec` / `idleWhitelistCriticalSec` | `300` / `600` | Raised thresholds for known-slow commands (`docker build`, `npm ci`, `git clone`…) |
+| `runtimeWarnSec` / `runtimeCriticalSec` | `180` / `600` | Wall-clock thresholds for non-streaming tools and self-timed commands |
+| `maxNotificationsPerCall` | `2` | Notification budget per tool call (setting it to 1 also drops the critical alert) |
+| `softKillGraceSec` | `15` | Under `yolo`, how long to wait after a soft kill before aborting the turn |
+| `maxAutoResumes` | `1` | Maximum auto-resumes per session (`0` = abort without resuming) |
+| `actionCooldownSec` | `60` | Minimum time between two automatic actions |
+| `resumeWithoutUI` | `false` | Allow auto-resume in modes without a UI (`-p`/`json`) |
+| `showStatusBar` | `true` | Show the live counter for flagged tools in the footer |
+| `notifyOnCompletion` | `true` | Report the outcome when a previously flagged tool finishes |
+| `tickIntervalMs` | `1000` | How often the guard re-evaluates |
+| `streamingTools` | `["bash"]` | Tools that emit streaming events (silence detection applies only to them) |
+| `classify.extraWatcher` / `extraInteractive` / `idleWhitelist` | `[]` | Extend the built-in lists; a broken regex is ignored, never an error |
 
-### 环境变量
+### Output language
 
-优先级由低到高：默认值 → 配置文件 → `PI_WATCHDOG_*` → `PI_GUARD_*`。
+Every message the guard shows you — footer status, notifications, `/guard` replies, the report handed to the model, and config warnings — is English by default. Set the language with either:
 
-| 变量 | 作用 |
+```bash
+PI_GUARD_LOCALE=zh pi        # for one run
+```
+
+```json
+{ "locale": "zh" }
+```
+
+`PI_GUARD_LOCALE` overrides the config file. An unsupported value is ignored with a warning (in the language that survives).
+
+Two things stay English on purpose: `yolo`'s capability diagnostics (`soft kill unavailable: …`), because they quote internal build state, and the `key=value` lines of `/guard status` (`running=`, `actions=`…), because they are meant to be parsed.
+
+### Environment variables
+
+Priority, low to high: defaults → config file → `PI_WATCHDOG_*` → `PI_GUARD_*`.
+
+| Variable | Effect |
 | --- | --- |
-| `PI_GUARD_OFF=1` / `PI_GUARD_ON=1` | 强制停用 / 启用 |
+| `PI_GUARD_OFF=1` / `PI_GUARD_ON=1` | Force disable / enable |
 | `PI_GUARD_MODE` | `observe` / `guard` / `yolo` |
-| `PI_GUARD_IDLE_WARN_MS`、`PI_GUARD_IDLE_CRITICAL_MS` | 静默阈值（毫秒） |
-| `PI_GUARD_RUNTIME_WARN_MS`、`PI_GUARD_RUNTIME_CRITICAL_MS` | 挂钟阈值（毫秒） |
-| `PI_GUARD_SOFT_KILL_GRACE_MS` | 软杀宽限期（毫秒） |
-| `PI_GUARD_ACTION_COOLDOWN_MS` | 两次自动动作的最小间隔（毫秒） |
-| `PI_GUARD_MAX_AUTO_RESUMES` | 每会话最多自动续跑次数（0–10） |
-| `PI_GUARD_RESUME_WITHOUT_UI=1` | 允许无 UI 模式自动续跑 |
-| `PI_GUARD_TICK_MS` | 判定间隔（毫秒） |
-| `PI_GUARD_CONFIG` | 配置文件路径 |
-| `PI_WATCHDOG_OFF`、`PI_WATCHDOG_WARN_MS`、`PI_WATCHDOG_CRITICAL_MS` | 旧变量名，仍然兼容 |
+| `PI_GUARD_LOCALE` | `en` / `zh` |
+| `PI_GUARD_IDLE_WARN_MS`, `PI_GUARD_IDLE_CRITICAL_MS` | Silence thresholds (milliseconds) |
+| `PI_GUARD_RUNTIME_WARN_MS`, `PI_GUARD_RUNTIME_CRITICAL_MS` | Wall-clock thresholds (milliseconds) |
+| `PI_GUARD_SOFT_KILL_GRACE_MS` | Soft-kill grace period (milliseconds) |
+| `PI_GUARD_ACTION_COOLDOWN_MS` | Minimum time between two automatic actions (milliseconds) |
+| `PI_GUARD_MAX_AUTO_RESUMES` | Maximum auto-resumes per session (0–10) |
+| `PI_GUARD_RESUME_WITHOUT_UI=1` | Allow auto-resume without a UI |
+| `PI_GUARD_TICK_MS` | Re-evaluation interval (milliseconds) |
+| `PI_GUARD_CONFIG` | Config file path |
+| `PI_WATCHDOG_OFF`, `PI_WATCHDOG_WARN_MS`, `PI_WATCHDOG_CRITICAL_MS` | Legacy names, still supported |
 
-## 常见问题
+## FAQ
 
-**为什么不默认自动中断？**
-自动中断（杀进程、中止本轮对话）是破坏性操作。0.1.x 只做可观测，0.2 才加入处置能力，但**默认仍是 `observe`**：先用一段时间确认阈值跟你机器的实际负载合得来，再决定要不要切 `guard`。任何模式下卡住都可以按 **Esc** 手动中断。
+**Why doesn't it interrupt by default?**
+Aborting a turn (or killing a process) is destructive. 0.1.x only observed things; 0.2 added the ability to act but keeps `observe` as the default, so you can first confirm that the thresholds suit your machine before switching to `guard`. In every mode, pressing **Esc** interrupts a hung command by hand.
 
-**长构建会不会被误报？**
-不会。只要还在输出，静默时钟就一直在被重置，真正的静默才计数。
+**Will a long build be flagged by mistake?**
+No. As long as output keeps coming, the silence clock keeps being reset. Only real silence counts.
 
-**装了以后没反应？**
-先确认 `/guard status` 里 `mode=observe · on`。会话是在安装之前启动的话，需要 `/reload` 或重启 pi。
+**I installed it and nothing happens?**
+Check that `/guard status` shows `on`. If the session started before the install, run `/reload` or restart pi.
 
-**自动处置会不会误伤？**
-只会对**超过严重阈值**的静默生效，且只处置一次、有冷却期、最多续跑 1 次。默认 `observe` 下完全不动手——建议先观察一段时间再切 `guard`。
+**Can the automatic action hit the wrong thing?**
+It only acts on silence **past the critical threshold**, once per tool, with a cooldown and at most one auto-resume. Under the default `observe` it never acts at all — observe for a while before switching to `guard`.
 
-**同时装本地源码和 npm 包会怎样？**
-pi 会直接**报错并拒绝加载**（两个扩展都注册 `--no-guard`，flag 冲突），不会静默加载两次。切换时先 `pi remove` 再 `pi install`。
+**What happens if I install both the local source and the npm package?**
+pi **fails loudly and refuses to load** (both extensions register `--no-guard`, a flag conflict) rather than loading twice silently. `pi remove` first, then `pi install`.
 
-## 许可
+## License
 
 MIT
 
-> 架构、检测模型、测试策略与发布流程等实现细节见 [`AGENTS.md`](./AGENTS.md)。
+> Architecture, detection model, test strategy and the release process are documented in [`AGENTS.md`](./AGENTS.md).

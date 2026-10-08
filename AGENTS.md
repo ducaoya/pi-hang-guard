@@ -1,21 +1,22 @@
 # AGENTS.md — pi-hang-guard 维护者须知
 
-> 面向自动化 agent 与维护者的项目上下文。**用户可见的安装使用说明见 [`README.md`](./README.md)。**
+> 面向自动化 agent 与维护者的项目上下文。**用户可见的安装使用说明见 [`README.md`](./README.md)（英）与 [`README.zh-CN.md`](./README.zh-CN.md)（中）。**
 
 ## 项目是什么
 
 pi（pi-coding-agent）的命令执行看门狗：监听工具执行事件，用「静默时长」判定 shell 命令是否卡死，按阈值给出底栏状态与通知。以 **pi package** 形式发布到 npm。
 
-当前版本 **0.1.x 为纯观察模式**：不覆盖内置工具、不杀进程、不中止对话、不改写命令。参见[路线图](#路线图)。
+当前版本 **0.3.x**：默认 `observe` 只观察，可显式开 `guard` / `yolo` 做分级处置，输出默认英文（`locale: "zh"` 切中文）。无论哪个模式都不覆盖内置工具、不改写命令。参见[路线图](#路线图)。
 
 ## 文档分工（约定）
 
 | 文件 | 面向 | 内容 |
 | --- | --- | --- |
-| `README.md` | 使用者 | 安装、命令、配置表、环境变量、常见问题 |
+| `README.md` | 使用者（英文，npm/GitHub/gallery 的默认渲染对象） | 安装、命令、配置表、环境变量、常见问题 |
+| `README.zh-CN.md` | 使用者（中文） | 与 `README.md` 一一对应；两份必须同改，互相在首行互链 |
 | `AGENTS.md`（本文） | 维护者 / agent | 架构、检测模型、不变量、测试策略、发布流程、路线图 |
 
-**改动用户可见行为时必须同步更新 `README.md`；改动实现细节必须同步更新本文。** 不要把实现原理写进 README。
+**改动用户可见行为时必须同步更新两份 README；改动实现细节必须同步更新本文。** 不要把实现原理写进 README。
 
 ## 文件职责
 
@@ -25,8 +26,9 @@ pi（pi-coding-agent）的命令执行看门狗：监听工具执行事件，用
 | `engine.ts` | 状态机：跟踪运行中工具、计算判定等级、产出状态与通知（无定时器、无时钟、无 I/O） |
 | `classify.ts` | 命令分类与归一化（纯正则/字符串） |
 | `config.ts` | 配置加载、字段校验、环境变量覆盖（纯函数，可注入读取器） |
-| `format.ts` | 状态栏与通知文案格式化（纯字符串） |
-| `tests/` | 五个套件，71 个用例，`node --test` 原生 TS 类型擦除 |
+| `format.ts` | 状态栏与通知文案格式化（纯字符串，只做拼接，文案取自 `i18n.ts`） |
+| `i18n.ts` | **所有用户可见文案的唯一来源**：`Locale`、`GuardMessages` 表（en/zh）、`messagesFor()` |
+| `tests/` | 六个套件，82 个用例，`node --test` 原生 TS 类型擦除 |
 | `tests/escalation.test.ts` | 处置阶梯的单测（模式、冷却、续跑上限、软杀降级、报告文本） |
 | `scripts/verify-live-rpc.mjs` | 真实 pi 进程端到端验证，支持 `observe\|guard\|yolo` 三模式（不发布） |
 | `scripts/sync-version.mjs` | `npm version` 时同步 `index.ts` 的 `VERSION` 常量 |
@@ -45,6 +47,7 @@ pi（pi-coding-agent）的命令执行看门狗：监听工具执行事件，用
 1. **engine 不抛异常、不读时钟、不做 I/O。** UI 调用统一走 `tryUi()` 包装，UI 抛错不得影响内部记账（有用例保护）。
 2. **只有 `index.ts` 触碰定时器和 pi API。** 新增行为优先加在 engine（可测），只有接线才写进 index。
 3. **插件绝不改变工具行为。** 只读事件，不注册工具、不改 `event.input`、不碰 `operations`。
+4. **所有展示给人的文案只能来自 `i18n.ts`。** 其他模块不得内联中英文字面量：`format.ts` 只负责拼接，`config.ts` 的告警也从表里取。新增文案必须同时填满 `en` 与 `zh`（`GuardMessages` 接口 + `tests/i18n.test.ts` 的逐键探针双重把关）。
 
 ### 主机接线（`index.ts`）
 
@@ -164,12 +167,14 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 - 配置路径：`$PI_GUARD_CONFIG` → `$PI_CODING_AGENT_DIR/hang-guard.json` → `~/.pi/agent/hang-guard.json`（`PI_CODING_AGENT_DIR` 是 pi 自己的 agent 目录环境变量，见 `dist/config.js:406`）
 - **`loadConfig` 永不抛异常**：文件缺失静默回退；JSON 解析失败/字段类型错误/越界/正则非法都只记 warning 并保留默认值
 - 数值字段：接受数字或数字字符串，范围 `0.001 ~ 86400` 秒（`tickIntervalMs` 为 `20 ~ 600000` ms）；`idleCriticalSec < idleWarnSec` 会被钳制并告警
-- `mode`：0.1.x 只接受 `"observe"`，`"guard"`/`"yolo"` 视为「未实现」，告警后回退
+- `mode`：接受 `"observe"` / `"guard"` / `"yolo"`；未知值告警后保留当前值
+- `locale`：只接受 `"en"` / `"zh"`，默认 `"en"`；未知值告警后保留当前值。**告警本身的语言跟随生效的 locale**：`loadConfig` 先用 `pickLocale()`（env → 文件 → en）定下语言，再进入 `mergeConfig`，且 `mergeConfig` 先读 `locale` 再读其他字段——否则坏配置的告警会退回英文。`PI_GUARD_LOCALE` 优先级高于配置文件里的 `locale`
 - `mergeConfig` 不修改入参（深拷贝）；`loadConfig` 必须把**读取阶段的 warning 与合并阶段的 warning 合并返回**（曾经漏掉前者，导致坏配置静默失败）
 
 ## 打包约束
 
-- `package.json` 的 `files` 决定发布内容；**新增源文件必须同步加入**
+- `package.json` 的 `files` 决定发布内容；**新增源文件必须同步加入**（如 `i18n.ts`）
+- npm 只会自动带上 `README.md`，**`README.zh-CN.md` 必须显式列入 `files`**
 - `pi.extensions: ["./index.ts"]` 是唯一入口
 - **`index.ts` 只允许 `import type` 引用 pi SDK**，不允许运行时 import。理由：这样入口可在无 pi 的进程里直接加载和测试（打包测试会断言这一点）
 - 入口里的 `VERSION` 常量必须与 `package.json` 的 `version` 一致。由 `tests/packaging.test.ts` 断言把关；`scripts/sync-version.mjs` 经 npm 的 `version` 生命周期脚本（`scripts.version`）在 `npm version` 时自动同步并 `git add`，所以发版无需手工改两处。**手工改版本号时仍必须两处同改。**
@@ -178,16 +183,17 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 ## 测试策略
 
 ```bash
-npm test                                   # 71 个用例
+npm test                                   # 82 个用例
 PI_SDK_ENTRY=/path/to/@earendil-works/pi-coding-agent/dist/index.js npm test   # 额外启用真实加载器用例
 ```
 
 | 套件 | 保护什么 |
 | --- | --- |
 | `tests/classify.test.ts` | 分类与归一化；含反例 `echo 'npm run dev'`、`git commit -m`、`docker run -d` 不得误判为 watcher/interactive |
-| `tests/config.test.ts` | 默认值、坏 JSON、类型错误、越界钳制、env 优先级、旧变量兼容、不可变性、`configPathFor` |
+| `tests/config.test.ts` | 默认值、坏 JSON、类型错误、越界钳制、env 优先级、旧变量兼容、不可变性、`configPathFor`、`locale` 的文件/env 优先级与非法值回退 |
+| `tests/i18n.test.ts` | **逐键探针**：两种 locale 的 `GuardMessages` 每一项都非空；同一键在中英下确实不同（防漏译）；format 与通知随 locale 切换；engine 随配置切语言；配置告警语言跟随 locale |
 | `tests/engine.test.ts` | 静默触发/不触发、非流式走挂钟、self-timed、白名单抬高、并发隔离、状态无条件清理、UI 冻结位移、通知配额、状态文案去重、UI 抛错不破坏记账 |
-| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 静态依赖、observe/guard 两条端到端链路、**打包版软杀诚实降级**、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
+| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 静态依赖、**两份 README 互相链接且都记录 locale**、observe/guard 两条端到端链路、**打包版软杀诚实降级**、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
 | `tests/escalation.test.ts` | 三种模式的行为、动作幂等性、冷却、续跑上限、软杀宽限期与 pending 重试、软杀不可用降级、无 actions 宿主不崩、abort 抛错不破记账、动作日志与报告文本 |
 
 **测试抓出过的真 bug（都已修，勿回退）：**
@@ -280,9 +286,11 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 
 **0.1.x**：非侵入观察——静默检测、命令分类、UI 冻结、`/guard`。
 
-**0.2.x（当前）**：分级处置——`guard` 中止本轮 + 结构化报告自动续跑；`yolo` 尝试软杀（仅非打包构建生效，会自动降级）。默认仍是 `observe`。
+**0.2.x**：分级处置——`guard` 中止本轮 + 结构化报告自动续跑；`yolo` 尝试软杀（仅非打包构建生效，会自动降级）。默认仍是 `observe`。
 
-**0.3（待定）**：致命模式检测。仅 watcher 类、仅在启动窗口（约 3s）内匹配不可自愈的错误（`Pre-transform error`、`MODULE_NOT_FOUND`、`EADDRINUSE`…）。**明确排除** `error TS\d+`、`ERROR in`、`warning`——它们在 watch 循环里是常态且可自愈，纳入即误杀。
+**0.3.x（当前）**：国际化——输出默认英文，`locale: "zh"` / `PI_GUARD_LOCALE` 切中文；README 拆为英文主文档 + 中文文档。
+
+**0.4（待定）**：致命模式检测。仅 watcher 类、仅在启动窗口（约 3s）内匹配不可自愈的错误（`Pre-transform error`、`MODULE_NOT_FOUND`、`EADDRINUSE`…）。**明确排除** `error TS\d+`、`ERROR in`、`warning`——它们在 watch 循环里是常态且可自愈，纳入即误杀。
 
 **其他候选**：watcher 类命令自动后台化（需要覆盖 bash 工具的 `operations`，已有完整设计）；用 OS 级进程发现实现不依赖 pi 内部注册表的软杀。
 
@@ -321,3 +329,7 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 | 2026-09-24 | 续跑只认自己发起的中断 | 用户按 Esc 是明确意图，绝不能被自动续跑覆盖 |
 | 2026-09-24 | 入口只允许 `import type` 引用 SDK | 保证可在无 pi 进程内加载与测试 |
 | 2026-09-24 | 文档分工：README 面向使用者，AGENTS.md 面向维护者 | 与 `pi-footer-styler` 保持同一套约定 |
+| 2026-10-08 | 输出默认英文，`locale`/`PI_GUARD_LOCALE` 切中文（含配置告警） | pi 的 package gallery 与受众以英文为主；中文用户只需一处配置。不用系统语言自动探测：同一份配置应当在任何机器上产生相同输出 |
+| 2026-10-08 | 文案集中到 `i18n.ts` 的 `GuardMessages` 表，其他模块不得内联字面量 | 漏译与文案漂移是 i18n 的典型故障；接口 + 逐键探针用例双重把关 |
+| 2026-10-08 | README 拆为 `README.md`（英）+ `README.zh-CN.md`（中），互相链接 | npm/GitHub/gallery 只渲染 `README.md`，英文放主文件才能被默认看到；单文件双语会让仓库首页过长 |
+| 2026-10-08 | `yolo` 能力诊断与 `/guard status` 的 `key=value` 行保持英文 | 前者引用内部构建状态，后者是机器可解析的诊断，不入翻译表 |
