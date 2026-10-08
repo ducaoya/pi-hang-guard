@@ -86,7 +86,7 @@ test("observe mode never touches a running tool", () => {
 	assert.equal(h.actions.softKills, 0);
 	assert.equal(h.actions.aborts, 0);
 	assert.equal(h.engine.consumeResume(), null);
-	assert.ok(h.notifications.some((n) => /疑似卡死/.test(n.message)));
+	assert.ok(h.notifications.some((n) => /Likely stuck/.test(n.message)));
 	assert.equal(h.engine.stats().actions, 0);
 });
 
@@ -99,7 +99,7 @@ test("guard mode aborts the turn and queues exactly one structured resume", () =
 
 	assert.equal(h.actions.aborts, 1, "the turn is aborted once");
 	assert.equal(h.actions.softKills, 0);
-	assert.ok(h.notifications.some((n) => /已中止本轮对话/.test(n.message)));
+	assert.ok(h.notifications.some((n) => /aborted this turn/.test(n.message)));
 
 	const report = h.engine.consumeResume();
 	assert.ok(report, "a resume report must be queued");
@@ -174,7 +174,7 @@ test("yolo mode soft-kills first and aborts only after the grace period", () => 
 	h.tick();
 	assert.equal(h.actions.softKills, 1);
 	assert.equal(h.actions.aborts, 0, "the turn survives a soft kill");
-	assert.ok(h.notifications.some((n) => /已杀掉其子进程/.test(n.message)));
+	assert.ok(h.notifications.some((n) => /killed its child processes/.test(n.message)));
 	assert.equal(h.engine.consumeResume(), null, "no restart is needed while the turn survives");
 
 	// The tool is still running 10s later: still inside the grace period.
@@ -259,7 +259,7 @@ test("a host without escalation actions stays observe-only", () => {
 	assert.doesNotThrow(() => engine.tick());
 	assert.equal(engine.consumeResume(), null);
 	assert.equal(engine.stats().actions, 0);
-	assert.ok(notifications.some((m) => /疑似卡死/.test(m)));
+	assert.ok(notifications.some((m) => /Likely stuck/.test(m)));
 });
 
 test("an abort that throws cannot break bookkeeping", () => {
@@ -314,13 +314,13 @@ test("resumeMessage carries the reason, the command and the output tail", () => 
 	});
 
 	assert.match(message, /pi-hang-guard/);
-	assert.match(message, /中止本轮对话/);
-	assert.match(message, /第 1\/2 次自动续跑/);
-	assert.match(message, /2m32s 无输出/, "the observation is rendered as a duration");
-	assert.match(message, /超过 150s 阈值/);
+	assert.match(message, /aborted the turn/);
+	assert.match(message, /auto-resume 1\/2/);
+	assert.match(message, /2m32s idle/, "the observation is rendered as a duration");
+	assert.match(message, /over the 150s threshold/);
 	assert.match(message, /npm run dev/);
 	assert.match(message, /Pre-transform error/);
-	assert.match(message, /请继续处理/);
+	assert.match(message, /Continue now/);
 });
 
 test("resumeMessage omits the tail when there is none", () => {
@@ -334,7 +334,7 @@ test("resumeMessage omits the tail when there is none", () => {
 		thresholdSec: 150,
 		mode: "yolo",
 	});
-	assert.match(message, /杀掉已登记的子进程/);
-	assert.match(message, /第 1\/1 次自动续跑/);
-	assert.ok(!message.includes("输出尾部"));
+	assert.match(message, /soft-killed the tracked child processes/);
+	assert.match(message, /auto-resume 1\/1/);
+	assert.ok(!message.includes("captured output tail"));
 });

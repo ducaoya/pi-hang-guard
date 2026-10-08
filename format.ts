@@ -2,11 +2,15 @@
  * Human-readable formatting helpers.
  *
  * Pure string functions only — no timers, no I/O — so they can be unit tested
- * without a pi runtime.
+ * without a pi runtime. All wording comes from `i18n.ts`; this module only
+ * decides how the pieces are glued together.
+ *
+ * Every function takes an optional `locale` (default `"en"`).
  */
 
 import type { CommandKind } from "./classify.ts";
 import type { GuardMode } from "./config.ts";
+import { DEFAULT_LOCALE, messagesFor, type Locale, type ResumeReportText } from "./i18n.ts";
 
 export interface StatusInput {
 	toolName: string;
@@ -16,6 +20,7 @@ export interface StatusInput {
 	observedMs: number;
 	level: 1 | 2;
 	mode: GuardMode;
+	locale?: Locale;
 }
 
 export interface MessageInput {
@@ -26,6 +31,7 @@ export interface MessageInput {
 	observedMs: number;
 	mode: GuardMode;
 	thresholdSec: number;
+	locale?: Locale;
 }
 
 /** `95s`, `3m12s`, `1h05m`. Sub-second values round up so `0s` never appears. */
@@ -44,15 +50,23 @@ export function formatDuration(ms: number): string {
 }
 
 /** Collapse a multi-line command into one short line for status bars. */
-export function previewCommand(command: string, max = 56): string {
+export function previewCommand(command: string, max = 56, locale: Locale = DEFAULT_LOCALE): string {
 	const single = command.replace(/\s+/g, " ").trim();
-	if (single === "") return "(no command)";
+	if (single === "") return messagesFor(locale).noCommand;
 	if (single.length <= max) return single;
 	return `${single.slice(0, Math.max(1, max - 1))}…`;
 }
 
-function observationLabel(basis: "idle" | "runtime", observedMs: number): string {
-	return basis === "idle" ? `${formatDuration(observedMs)} 无输出` : `已运行 ${formatDuration(observedMs)}`;
+/** `1m30s idle` for streaming tools, `running 1m30s` for the wall-clock basis. */
+export function observationText(
+	basis: "idle" | "runtime",
+	observedMs: number,
+	locale: Locale = DEFAULT_LOCALE,
+): string {
+	const messages = messagesFor(locale);
+	return basis === "idle"
+		? messages.idleObservation(formatDuration(observedMs))
+		: messages.runtimeObservation(formatDuration(observedMs));
 }
 
 function kindLabel(kind: CommandKind): string {
@@ -62,39 +76,45 @@ function kindLabel(kind: CommandKind): string {
 
 /** Footer status line for a running tool that already crossed a threshold. */
 export function statusText(input: StatusInput): string {
+	const messages = messagesFor(input.locale);
 	const icon = input.level === 2 ? "⚠" : "⏱";
 	const parts = [
 		`${icon} ${input.toolName}`,
-		observationLabel(input.basis, input.observedMs),
+		observationText(input.basis, input.observedMs, input.locale),
 		kindLabel(input.kind),
-		previewCommand(input.command),
+		previewCommand(input.command, 56, input.locale),
 	];
 	if (input.level === 2 && input.mode === "observe") {
-		parts.push("仅提醒");
+		parts.push(messages.notifyOnly);
 	}
 	return parts.join(" · ");
 }
 
 /** First-tier notification: still running, may be stuck. */
 export function warnMessage(input: MessageInput): string {
+	const messages = messagesFor(input.locale);
 	return [
-		`${input.toolName} ${observationLabel(input.basis, input.observedMs)}（${kindLabel(input.kind)}）`,
-		`命令: ${previewCommand(input.command, 80)}`,
-		`可能卡住。继续等待，或按 Esc 中断。`,
+		messages.observationWithKind(
+			`${input.toolName} ${observationText(input.basis, input.observedMs, input.locale)}`,
+			kindLabel(input.kind),
+		),
+		messages.commandLine(previewCommand(input.command, 80, input.locale)),
+		messages.warnBody,
 	].join("\n");
 }
 
 /** Second-tier notification: very likely stuck. */
 export function criticalMessage(input: MessageInput): string {
+	const messages = messagesFor(input.locale);
 	const lines = [
-		`${input.toolName} ${observationLabel(input.basis, input.observedMs)}（超过 ${input.thresholdSec}s 阈值，${kindLabel(input.kind)}）`,
-		`命令: ${previewCommand(input.command, 80)}`,
+		messages.criticalReason(
+			`${input.toolName} ${observationText(input.basis, input.observedMs, input.locale)}`,
+			input.thresholdSec,
+			kindLabel(input.kind),
+		),
+		messages.commandLine(previewCommand(input.command, 80, input.locale)),
+		input.mode === "observe" ? messages.criticalObserveBody : messages.criticalActBody,
 	];
-	if (input.mode === "observe") {
-		lines.push("疑似卡死。当前为观察模式（observe），不会自动中断；按 Esc 手动中断。");
-	} else {
-		lines.push("疑似卡死，请检查该命令是否在等待输入或已失去连接。");
-	}
 	return lines.join("\n");
 }
 
@@ -105,35 +125,33 @@ export function completionMessage(input: {
 	maxObservedMs: number;
 	basis: "idle" | "runtime";
 	isError: boolean;
+	locale?: Locale;
 }): string {
-	const outcome = input.isError ? "失败" : "完成";
-	const peak = input.maxObservedMs > 0 ? `，最长${input.basis === "idle" ? "静默" : "运行"} ${formatDuration(input.maxObservedMs)}` : "";
-	return `${input.toolName} 最终${outcome}（耗时 ${formatDuration(input.observedMs)}${peak}）`;
+	const messages = messagesFor(input.locale);
+	return messages.completion({
+		toolName: input.toolName,
+		outcome: input.isError ? messages.failedOutcome : messages.completedOutcome,
+		duration: formatDuration(input.observedMs),
+		peak:
+			input.maxObservedMs > 0
+				? { label: messages.peakLabel(input.basis), duration: formatDuration(input.maxObservedMs) }
+				: undefined,
+	});
 }
 
-export interface ResumeReport {
-	action: "soft-kill" | "abort";
-	toolName: string;
-	command: string;
-	kind: CommandKind;
-	basis: "idle" | "runtime";
-	observedMs: number;
-	thresholdSec: number;
-	mode: GuardMode;
+export interface ResumeReport extends Omit<ResumeReportText, "resumeIndex" | "maxResumes"> {
 	/** 1-based index of this automatic resumption. Defaults to 1. */
 	resumeIndex?: number;
 	maxResumes?: number;
-	softKillDetail?: string;
 	/** Captured tail of the tool's streamed output, if any. */
 	outputTail?: string;
+	locale?: Locale;
 }
 
 /** Human label for an escalation step. */
-export function actionLabel(action: "soft-kill" | "abort"): string {
-	return action === "soft-kill" ? "杀掉已登记的子进程（保留本轮对话）" : "中止本轮对话";
+export function actionLabel(action: "soft-kill" | "abort", locale: Locale = DEFAULT_LOCALE): string {
+	return messagesFor(locale).actionLabel(action);
 }
-
-const MAX_TAIL_CHARS = 1500;
 
 /**
  * Structured report handed back to the model after an automatic action.
@@ -142,23 +160,19 @@ const MAX_TAIL_CHARS = 1500;
  * has no idea why the turn ended.
  */
 export function resumeMessage(report: ResumeReport): string {
-	const lines = [
-		"[pi-hang-guard] 已自动处置一个疑似卡死的命令",
-		"",
-		`动作: ${actionLabel(report.action)}（第 ${report.resumeIndex ?? 1}/${report.maxResumes ?? 1} 次自动续跑，mode=${report.mode}）`,
-		`原因: ${report.toolName} ${observationLabel(report.basis, report.observedMs)}（超过 ${report.thresholdSec}s 阈值，${kindLabel(report.kind)}）`,
-		`命令: ${previewCommand(report.command, 120)}`,
-	];
-	if (report.softKillDetail) lines.push(`补充: ${report.softKillDetail}`);
-	const tail = (report.outputTail ?? "").trim();
-	if (tail !== "") {
-		lines.push("", "已收集的输出尾部:", "```", tail.slice(-MAX_TAIL_CHARS), "```");
-	}
-	lines.push(
-		"",
-		"请继续处理：先判断该命令是在等待输入、网络挂起，还是本身就是 dev/watch 服务；若是服务类命令，改用后台运行并轮询日志，不要在前台阻塞。",
-	);
-	return lines.join("\n");
+	const messages = messagesFor(report.locale);
+	const resumeIndex = report.resumeIndex ?? 1;
+	const maxResumes = report.maxResumes ?? 1;
+	return messages.resume({
+		...report,
+		resumeIndex,
+		maxResumes,
+		reason: messages.criticalReason(
+			`${report.toolName} ${observationText(report.basis, report.observedMs, report.locale)}`,
+			report.thresholdSec,
+			kindLabel(report.kind),
+		),
+	});
 }
 
 /** One-line summary used by `/guard status`. */

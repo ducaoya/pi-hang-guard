@@ -2,9 +2,10 @@
  * pi-hang-guard — extension entry point.
  *
  * Watches every tool call pi runs and reports shell commands that stop
- * producing output. This build is deliberately non-invasive: it only tracks
- * events and announces what it sees. It never overrides a built-in tool, never
- * kills a process, and never aborts a turn.
+ * producing output. It never overrides a built-in tool and never rewrites a
+ * command: it only reads events. Escalation (`guard` aborts the turn, `yolo`
+ * tries a soft kill first) is opt-in and off by default; diagnostics stay in
+ * English, while every user-facing message follows `config.locale`.
  *
  * Registered events:
  *   tool_execution_start / tool_execution_update / tool_execution_end
@@ -23,7 +24,8 @@ import {
 	type GuardUI,
 	type SoftKillOutcome,
 } from "./engine.ts";
-import { formatDuration, previewCommand, resumeMessage } from "./format.ts";
+import { observationText, previewCommand, resumeMessage } from "./format.ts";
+import { messagesFor } from "./i18n.ts";
 
 const VERSION = "0.2.2";
 
@@ -195,28 +197,32 @@ export default function commandGuard(pi: ExtensionAPI): void {
 
 	function report(): string {
 		const stats = engine.stats();
+		const locale = state.config.locale;
+		const messages = messagesFor(locale);
 		const lines = [
-			`pi-hang-guard v${VERSION} · mode=${state.config.mode} · ${effectiveEnabled() ? "on" : "off"}`,
+			`pi-hang-guard v${VERSION} · mode=${state.config.mode} · locale=${locale} · ${effectiveEnabled() ? "on" : "off"}`,
 			`running=${stats.running} skippedInteractive=${stats.skippedInteractive} notifications=${stats.notifications} paused=${stats.paused ? "yes" : "no"}`,
 			`actions=${stats.actions} resumes=${stats.resumes}/${state.config.maxAutoResumes} pendingResume=${stats.pendingResume ? "yes" : "no"}`,
 		];
 		for (const entry of engine.list()) {
-			const observed =
-				entry.basis === "idle"
-					? `${formatDuration(entry.observedMs)} 无输出`
-					: `已运行 ${formatDuration(entry.observedMs)}`;
+			const observed = observationText(entry.basis, entry.observedMs, locale);
 			lines.push(
-				`- ${entry.toolName} ${observed} · ${entry.kind}${entry.selfTimed ? " · self-timed" : ""}${entry.idleWhitelisted ? " · idle-tolerant" : ""} · ${previewCommand(entry.command, 48)}`,
+				`- ${entry.toolName} ${observed} · ${entry.kind}${entry.selfTimed ? " · self-timed" : ""}${entry.idleWhitelisted ? " · idle-tolerant" : ""} · ${previewCommand(entry.command, 48, locale)}`,
 			);
 		}
-		lines.push(`config: ${state.configPath}`);
+		lines.push(messages.reportConfigLine(state.configPath));
 		for (const action of engine.actionLog().slice(-3)) {
 			lines.push(
-				`action: ${action.action} · ${action.toolName} · ${previewCommand(action.command, 40)} · ${formatDuration(action.observedMs)} 静默`,
+				messages.reportActionLine({
+					action: action.action,
+					toolName: action.toolName,
+					command: previewCommand(action.command, 40, locale),
+					observation: observationText(action.basis, action.observedMs, locale),
+				}),
 			);
 		}
 		if (state.warnings.length > 0) {
-			lines.push(`warnings: ${state.warnings.join(" | ")}`);
+			lines.push(messages.reportWarningsLine(state.warnings));
 		}
 		return lines.join("\n");
 	}
@@ -263,7 +269,11 @@ export default function commandGuard(pi: ExtensionAPI): void {
 		if (!report) return;
 		if (!ctx.hasUI && !state.config.resumeWithoutUI) return;
 
-		const message = resumeMessage({ ...report, outputTail: outputTails.get(report.toolCallId) });
+		const message = resumeMessage({
+			...report,
+			outputTail: outputTails.get(report.toolCallId),
+			locale: state.config.locale,
+		});
 		// `agent_settled` is emitted synchronously from the finished run's `finally`
 		// block, so starting a new turn must be deferred out of that call stack.
 		setTimeout(() => {
@@ -292,7 +302,11 @@ export default function commandGuard(pi: ExtensionAPI): void {
 		void resolveKiller();
 		if (state.warnings.length > 0) {
 			ui.notify(
-				`pi-hang-guard: ${state.warnings.length} config problem(s) in ${state.configPath}\n- ${state.warnings.join("\n- ")}`,
+				messagesFor(state.config.locale).configProblemNotice(
+					state.warnings.length,
+					state.configPath,
+					state.warnings,
+				),
 				"warning",
 			);
 		}
@@ -306,14 +320,17 @@ export default function commandGuard(pi: ExtensionAPI): void {
 			switch (action) {
 				case "on": {
 					state.config.enabled = true;
-					ctx.ui.notify("pi-hang-guard: 已启用（observe 模式）", "info");
+					ctx.ui.notify(
+						messagesFor(state.config.locale).enabledNotice(state.config.mode),
+						"info",
+					);
 					return;
 				}
 				case "off": {
 					state.config.enabled = false;
 					engine.onAgentSettled();
 					stopTicker();
-					ctx.ui.notify("pi-hang-guard: 已停用", "info");
+					ctx.ui.notify(messagesFor(state.config.locale).disabledNotice, "info");
 					return;
 				}
 				case "reload": {
@@ -322,7 +339,7 @@ export default function commandGuard(pi: ExtensionAPI): void {
 					state.warnings = next.warnings;
 					state.configPath = next.path;
 					ctx.ui.notify(
-						`pi-hang-guard: 配置已重载（${state.configPath}），warnings=${state.warnings.length}`,
+						messagesFor(state.config.locale).reloadedNotice(state.configPath, state.warnings.length),
 						state.warnings.length > 0 ? "warning" : "info",
 					);
 					return;
@@ -333,7 +350,7 @@ export default function commandGuard(pi: ExtensionAPI): void {
 					return;
 				}
 				default: {
-					ctx.ui.notify("用法: /guard [status | on | off | reload]", "warning");
+					ctx.ui.notify(messagesFor(state.config.locale).usageNotice, "warning");
 				}
 			}
 		},

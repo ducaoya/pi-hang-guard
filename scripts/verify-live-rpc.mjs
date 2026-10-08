@@ -114,9 +114,9 @@ function report() {
 	console.log(`\n--- setStatus ---`);
 	console.log(`  guard 状态写入 ${guardStatuses.length} 次，最后一条: ${guardStatuses.at(-1)?.statusText ?? "(cleared)"}`);
 
-	const warned = notifications.some((n) => /无输出/.test(n));
-	const acted = notifications.some((n) => /已中止本轮对话/.test(n));
-	const softKilled = notifications.some((n) => /已杀掉其子进程/.test(n));
+	const warned = notifications.some((n) => /idle/.test(n));
+	const acted = notifications.some((n) => /aborted this turn/.test(n));
+	const softKilled = notifications.some((n) => /killed its child processes/.test(n));
 	const resumed = customMessages.some((m) => m.customType === "pi-hang-guard");
 	const statusCleared = guardStatuses.some((e) => e.statusText === undefined);
 

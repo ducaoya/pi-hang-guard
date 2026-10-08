@@ -26,7 +26,9 @@
 		"classify.ts",
 		"engine.ts",
 		"format.ts",
+		"i18n.ts",
 		"README.md",
+		"README.zh-CN.md",
 		"LICENSE"
 	],
 	"pi": {
@@ -39,7 +41,7 @@
 	},
 	"scripts": {
 		"version": "node scripts/sync-version.mjs && git add index.ts",
-		"test": "node --test tests/packaging.test.ts tests/classify.test.ts tests/config.test.ts tests/engine.test.ts tests/escalation.test.ts",
+		"test": "node --test tests/packaging.test.ts tests/classify.test.ts tests/config.test.ts tests/i18n.test.ts tests/engine.test.ts tests/escalation.test.ts",
 		"test:watch": "node --test --watch tests/engine.test.ts"
 	}
 }

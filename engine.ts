@@ -20,7 +20,8 @@
 
 import { classifyCommand, type CommandKind } from "./classify.ts";
 import { selectClassifyRules, type GuardConfig, type GuardMode } from "./config.ts";
-import { actionLabel, completionMessage, criticalMessage, statusText, warnMessage } from "./format.ts";
+import { completionMessage, criticalMessage, statusText, warnMessage } from "./format.ts";
+import { messagesFor } from "./i18n.ts";
 
 export type GuardLevel = 0 | 1 | 2;
 export type GuardBasis = "idle" | "runtime";
@@ -263,9 +264,13 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 			// Aborting is best effort: a stale context must not break bookkeeping.
 		}
 		notify(
-			`pi-hang-guard: ${entry.toolName} ${result.basis === "idle" ? "静默" : "运行"}超阈值，已中止本轮对话${
-			report.resumeIndex ? `（将自动续跑 ${report.resumeIndex}/${report.maxResumes}）` : ""
-			}`,
+			messagesFor(config.locale).abortNotice({
+				toolName: entry.toolName,
+				basis: result.basis,
+				resume: report.resumeIndex
+					? { index: report.resumeIndex, max: report.maxResumes ?? 1 }
+					: undefined,
+			}),
 			"error",
 		);
 	}
@@ -305,7 +310,7 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 				nextActionAt = at + Math.max(0, config.softKillGraceSec) * 1000;
 				actionsTaken.push(buildReport(entry, result, config, "soft-kill"));
 				notify(
-					`pi-hang-guard: ${entry.toolName} 超阈值，已杀掉其子进程（保留本轮对话，工具将以非零退出码返回）`,
+					messagesFor(config.locale).softKillNotice({ toolName: entry.toolName }),
 					"warning",
 				);
 				return;
@@ -373,6 +378,7 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 			observedMs,
 			level,
 			mode: config.mode,
+			locale: config.locale,
 		});
 	}
 
@@ -457,6 +463,7 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 						maxObservedMs: entry.maxObservedMs,
 						basis: entry.basis,
 						isError: input.isError,
+						locale: config.locale,
 					}),
 					input.isError ? "warning" : "info",
 				);
@@ -515,6 +522,7 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 							observedMs: result.observedMs,
 							mode: config.mode,
 							thresholdSec: result.level === 2 ? result.criticalSec : result.warnSec,
+							locale: config.locale,
 						};
 						notify(
 							result.level === 2 ? criticalMessage(payload) : warnMessage(payload),

@@ -26,6 +26,7 @@ test("the manifest is a valid pi package", () => {
 	assert.equal(packageJson.type, "module");
 	assert.ok(packageJson.keywords.includes("pi-package"), "the pi-package keyword drives gallery discovery");
 	assert.equal(packageJson.peerDependencies["@earendil-works/pi-coding-agent"], "*");
+	assert.ok(packageJson.description.length > 0, "the npm description is the gallery subtitle");
 	assert.ok(process.versions.node, "tests require node");
 });
 
@@ -56,6 +57,21 @@ test("the version constant in the entry matches package.json", () => {
 	const match = entrySource.match(/const VERSION = "([^"]+)"/);
 	assert.ok(match, "index.ts must declare a VERSION constant");
 	assert.equal(match[1], packageJson.version, "bump both files together");
+});
+
+test("the README pair exists, is published, and cross-links", () => {
+	const english = readFileSync(join(root, "README.md"), "utf8");
+	const chinese = readFileSync(join(root, "README.zh-CN.md"), "utf8");
+
+	assert.ok(english.includes("(./README.zh-CN.md)"), "README.md must link to the Chinese docs");
+	assert.ok(chinese.includes("(./README.md)"), "README.zh-CN.md must link back to the English docs");
+	// npm only ships README.md automatically, so the translation needs to be listed.
+	assert.ok(packageJson.files.includes("README.zh-CN.md"), "README.zh-CN.md must be listed in \"files\"");
+	// Both documents must document the same switchable language.
+	assert.ok(english.includes('"locale": "en"'), "the English README must document the locale key");
+	assert.ok(chinese.includes('"locale": "en"'), "the Chinese README must document the locale key");
+	assert.ok(english.includes("PI_GUARD_LOCALE"), "the English README must document PI_GUARD_LOCALE");
+	assert.ok(chinese.includes("PI_GUARD_LOCALE"), "the Chinese README must document PI_GUARD_LOCALE");
 });
 
 test("the entry has no runtime dependency on the pi SDK", () => {
@@ -191,7 +207,7 @@ test("end to end: a silent bash command is reported and then cleaned up", async 
 	});
 	await sleep(150);
 
-	const warned = fake.notifications.filter((entry) => /无输出/.test(entry.message));
+	const warned = fake.notifications.filter((entry) => /idle/.test(entry.message));
 	assert.ok(warned.length >= 1, `expected a silence warning, got ${JSON.stringify(fake.notifications)}`);
 	assert.ok(fake.statuses.has("guard:e2e"), "the footer status must be set while the tool runs");
 	assert.match(fake.statuses.get("guard:e2e") ?? "", /server\/watch/);
@@ -238,10 +254,10 @@ test("end to end: /guard status and /guard off work", async () => {
 	assert.match(fake.notifications.at(-1)?.message ?? "", /pi-hang-guard v/);
 
 	await guard.handler("off", fake.ctx);
-	assert.match(fake.notifications.at(-1)?.message ?? "", /已停用/);
+	assert.match(fake.notifications.at(-1)?.message ?? "", /disabled/);
 
 	await guard.handler("nonsense", fake.ctx);
-	assert.match(fake.notifications.at(-1)?.message ?? "", /用法/);
+	assert.match(fake.notifications.at(-1)?.message ?? "", /usage/);
 });
 
 test("end to end: observe mode only warns, even with tiny thresholds", async () => {
@@ -257,7 +273,7 @@ test("end to end: observe mode only warns, even with tiny thresholds", async () 
 	await fake.emit("tool_execution_start", { toolCallId: "obs", toolName: "bash", args: { command: "sleep 60" } });
 	await sleep(200);
 
-	assert.ok(fake.notifications.some((n) => /无输出/.test(n.message)));
+	assert.ok(fake.notifications.some((n) => /idle/.test(n.message)));
 	assert.equal(fake.aborts.count, 0, "observe mode must never abort");
 	assert.equal(fake.sent.length, 0, "observe mode must never restart the flow");
 
@@ -285,7 +301,7 @@ test("end to end: guard mode aborts the turn and hands the model a report", asyn
 
 	await sleep(220);
 	assert.equal(fake.aborts.count, 1, "the turn is aborted once the critical threshold is crossed");
-	assert.ok(fake.notifications.some((n) => /已中止本轮对话/.test(n.message)));
+	assert.ok(fake.notifications.some((n) => /aborted this turn/.test(n.message)));
 
 	await fake.emit("agent_settled", {});
 	await sleep(60);
@@ -295,7 +311,7 @@ test("end to end: guard mode aborts the turn and hands the model a report", asyn
 	assert.equal(delivered.message.customType, "pi-hang-guard");
 	assert.deepEqual(delivered.options, { triggerTurn: true });
 	const body = String(delivered.message.content);
-	assert.match(body, /已自动处置/);
+	assert.match(body, /automatically handled/);
 	assert.match(body, /npm run dev/);
 	assert.match(body, /Pre-transform error/, "the captured output tail must be included");
 
@@ -321,7 +337,7 @@ test("end to end: a bundled pi build degrades the soft kill honestly", async () 
 		await sleep(220);
 
 		assert.ok(
-			!fake.notifications.some((n) => /已杀掉其子进程/.test(n.message)),
+			!fake.notifications.some((n) => /killed its child processes/.test(n.message)),
 			"a bundled build must never claim a soft kill it cannot perform",
 		);
 		assert.equal(fake.aborts.count, 1, "it escalates straight to aborting the turn");

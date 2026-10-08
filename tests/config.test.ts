@@ -123,6 +123,55 @@ test("escalation knobs are validated and clamped", () => {
 	assert.equal(outOfRange.warnings.length, 3);
 });
 
+test("locale comes from the file, then from the environment", () => {
+	assert.equal(DEFAULT_CONFIG.locale, "en", "English is the default output language");
+
+	const fromFile = loadConfig({
+		path: "/tmp/x.json",
+		env: {},
+		readFile: () => JSON.stringify({ locale: "zh" }),
+	});
+	assert.equal(fromFile.config.locale, "zh");
+	assert.deepEqual(fromFile.warnings, []);
+
+	const fromEnv = loadConfig({
+		path: "/tmp/x.json",
+		env: { PI_GUARD_LOCALE: "zh" },
+		readFile: () => JSON.stringify({ locale: "en" }),
+	});
+	assert.equal(fromEnv.config.locale, "zh", "the environment wins over the file");
+	assert.deepEqual(fromEnv.warnings, []);
+});
+
+test("an unknown locale is ignored with a warning in the surviving language", () => {
+	const fromFile = loadConfig({
+		path: "/tmp/x.json",
+		env: {},
+		readFile: () => JSON.stringify({ locale: "ja" }),
+	});
+	assert.equal(fromFile.config.locale, "en");
+	assert.match(fromFile.warnings.join(" "), /unknown locale "ja"/);
+
+	const fromEnv = loadConfig({
+		path: "/tmp/x.json",
+		env: { PI_GUARD_LOCALE: "ja" },
+		readFile: MISSING,
+	});
+	assert.equal(fromEnv.config.locale, "en");
+	assert.match(fromEnv.warnings.join(" "), /PI_GUARD_LOCALE="ja"/);
+});
+
+test("config diagnostics are localized once the file asks for a language", () => {
+	const loaded = loadConfig({
+		path: "/tmp/x.json",
+		env: {},
+		readFile: () => JSON.stringify({ locale: "zh", idleWarnSec: "nope" }),
+	});
+	assert.equal(loaded.config.locale, "zh");
+	assert.match(loaded.warnings.join(" "), /必须是/);
+	assert.ok(!/must be a number/.test(loaded.warnings.join(" ")), "warnings follow the chosen locale");
+});
+
 test("PI_GUARD_MODE accepts the escalation modes", () => {
 	const guard = loadConfig({ path: "/tmp/x.json", env: { PI_GUARD_MODE: "guard" }, readFile: MISSING });
 	assert.equal(guard.config.mode, "guard");

@@ -8,7 +8,8 @@
  *   4. `PI_GUARD_*` environment variables
  *
  * A missing or broken config file never fails the guard: it falls back to
- * defaults and reports a warning.
+ * defaults and reports a warning. Warnings are written in the configured
+ * language (see `i18n.ts`), because they are shown to the user through the UI.
  */
 
 import { readFileSync } from "node:fs";
@@ -16,6 +17,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ClassifyRules } from "./classify.ts";
+import {
+	DEFAULT_LOCALE,
+	isLocale,
+	messagesFor,
+	type GuardMessages,
+	type Locale,
+} from "./i18n.ts";
 
 /** Escalation mode. `observe` never touches a running tool. */
 export type GuardMode = "observe" | "guard" | "yolo";
@@ -31,6 +39,8 @@ export interface GuardClassifyConfig extends ClassifyRules {
 export interface GuardConfig {
 	enabled: boolean;
 	mode: GuardMode;
+	/** Language of every message the guard shows a human. English by default. */
+	locale: Locale;
 	/**
 	 * Tools that stream partial output, so "time with no output" can be measured.
 	 * Built-in `bash` is the only pi tool that emits `tool_execution_update`.
@@ -66,6 +76,7 @@ export interface GuardConfig {
 export const DEFAULT_CONFIG: GuardConfig = {
 	enabled: true,
 	mode: "observe",
+	locale: DEFAULT_LOCALE,
 	streamingTools: ["bash"],
 	idleWarnSec: 90,
 	idleCriticalSec: 150,
@@ -125,12 +136,13 @@ function readNumber(
 	current: number,
 	warnings: string[],
 	options: { min: number; max: number },
+	messages: GuardMessages,
 ): number {
 	const raw = source[key];
 	if (raw === undefined) return current;
 	const value = typeof raw === "string" ? Number(raw) : raw;
 	if (typeof value !== "number" || !Number.isFinite(value) || value < options.min || value > options.max) {
-		warnings.push(`"${key}" must be a number between ${options.min} and ${options.max}; keeping ${current}`);
+		warnings.push(messages.configNumber(key, options.min, options.max, current));
 		return current;
 	}
 	return value;
@@ -141,11 +153,12 @@ function readBoolean(
 	key: string,
 	current: boolean,
 	warnings: string[],
+	messages: GuardMessages,
 ): boolean {
 	const raw = source[key];
 	if (raw === undefined) return current;
 	if (typeof raw !== "boolean") {
-		warnings.push(`"${key}" must be a boolean; keeping ${current}`);
+		warnings.push(messages.configBoolean(key, current));
 		return current;
 	}
 	return raw;
@@ -156,94 +169,130 @@ function readStringArray(
 	key: string,
 	current: string[],
 	warnings: string[],
+	messages: GuardMessages,
 ): string[] {
 	const raw = source[key];
 	if (raw === undefined) return current;
 	if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) {
-		warnings.push(`"${key}" must be an array of strings; keeping the default`);
+		warnings.push(messages.configStringArray(key));
 		return current;
 	}
 	return raw as string[];
 }
 
+function readLocale(
+	source: Record<string, unknown>,
+	key: string,
+	current: Locale,
+	warnings: string[],
+): Locale {
+	const raw = source[key];
+	if (raw === undefined) return current;
+	if (!isLocale(raw)) {
+		warnings.push(messagesFor(current).configUnknownLocale(String(raw), current));
+		return current;
+	}
+	return raw;
+}
+
 /**
  * Merge an untrusted partial config over a base config, validating each field.
  * Invalid values are ignored and reported instead of throwing.
+ *
+ * `locale` only selects the language of the emitted warnings; the merged config
+ * always carries the value the user asked for (or the base value).
  */
-export function mergeConfig(base: GuardConfig, patch: unknown): { config: GuardConfig; warnings: string[] } {
+export function mergeConfig(
+	base: GuardConfig,
+	patch: unknown,
+	warnLocale: Locale = base.locale,
+): { config: GuardConfig; warnings: string[] } {
 	const warnings: string[] = [];
 	const config = cloneConfig(base);
+	config.locale = warnLocale;
+	let messages = messagesFor(config.locale);
 	if (patch === undefined || patch === null) return { config, warnings };
 	if (!isRecord(patch)) {
-		warnings.push("config must be a JSON object; using defaults");
+		warnings.push(messages.configNotObject);
 		return { config, warnings };
 	}
 
-	config.enabled = readBoolean(patch, "enabled", config.enabled, warnings);
-	config.showStatusBar = readBoolean(patch, "showStatusBar", config.showStatusBar, warnings);
-	config.notifyOnCompletion = readBoolean(patch, "notifyOnCompletion", config.notifyOnCompletion, warnings);
+	// Read `locale` first so every later warning already speaks the chosen language.
+	config.locale = readLocale(patch, "locale", config.locale, warnings);
+	messages = messagesFor(config.locale);
+
+	config.enabled = readBoolean(patch, "enabled", config.enabled, warnings, messages);
+	config.showStatusBar = readBoolean(patch, "showStatusBar", config.showStatusBar, warnings, messages);
+	config.notifyOnCompletion = readBoolean(
+		patch,
+		"notifyOnCompletion",
+		config.notifyOnCompletion,
+		warnings,
+		messages,
+	);
 
 	if (patch.mode !== undefined) {
 		if (GUARD_MODES.includes(patch.mode as GuardMode)) {
 			config.mode = patch.mode as GuardMode;
 		} else {
-			warnings.push(`unknown mode "${String(patch.mode)}"; keeping "${config.mode}"`);
+			warnings.push(messages.configUnknownMode(String(patch.mode), config.mode));
 		}
 	}
 
-	config.streamingTools = readStringArray(patch, "streamingTools", config.streamingTools, warnings);
+	config.streamingTools = readStringArray(patch, "streamingTools", config.streamingTools, warnings, messages);
 
 	const bounds = { min: 0.001, max: 86_400 };
-	config.idleWarnSec = readNumber(patch, "idleWarnSec", config.idleWarnSec, warnings, bounds);
-	config.idleCriticalSec = readNumber(patch, "idleCriticalSec", config.idleCriticalSec, warnings, bounds);
-	config.idleWhitelistWarnSec = readNumber(patch, "idleWhitelistWarnSec", config.idleWhitelistWarnSec, warnings, bounds);
-	config.idleWhitelistCriticalSec = readNumber(patch, "idleWhitelistCriticalSec", config.idleWhitelistCriticalSec, warnings, bounds);
-	config.runtimeWarnSec = readNumber(patch, "runtimeWarnSec", config.runtimeWarnSec, warnings, bounds);
-	config.runtimeCriticalSec = readNumber(patch, "runtimeCriticalSec", config.runtimeCriticalSec, warnings, bounds);
+	config.idleWarnSec = readNumber(patch, "idleWarnSec", config.idleWarnSec, warnings, bounds, messages);
+	config.idleCriticalSec = readNumber(patch, "idleCriticalSec", config.idleCriticalSec, warnings, bounds, messages);
+	config.idleWhitelistWarnSec = readNumber(patch, "idleWhitelistWarnSec", config.idleWhitelistWarnSec, warnings, bounds, messages);
+	config.idleWhitelistCriticalSec = readNumber(patch, "idleWhitelistCriticalSec", config.idleWhitelistCriticalSec, warnings, bounds, messages);
+	config.runtimeWarnSec = readNumber(patch, "runtimeWarnSec", config.runtimeWarnSec, warnings, bounds, messages);
+	config.runtimeCriticalSec = readNumber(patch, "runtimeCriticalSec", config.runtimeCriticalSec, warnings, bounds, messages);
 	config.maxNotificationsPerCall = readNumber(patch, "maxNotificationsPerCall", config.maxNotificationsPerCall, warnings, {
 		min: 1,
 		max: 100,
-	});
+	}, messages);
 	config.softKillGraceSec = readNumber(patch, "softKillGraceSec", config.softKillGraceSec, warnings, {
 		min: 0,
 		max: 3_600,
-	});
+	}, messages);
 	config.maxAutoResumes = readNumber(patch, "maxAutoResumes", config.maxAutoResumes, warnings, {
 		min: 0,
 		max: 10,
-	});
+	}, messages);
 	config.actionCooldownSec = readNumber(patch, "actionCooldownSec", config.actionCooldownSec, warnings, {
 		min: 0,
 		max: 86_400,
-	});
-	config.resumeWithoutUI = readBoolean(patch, "resumeWithoutUI", config.resumeWithoutUI, warnings);
+	}, messages);
+	config.resumeWithoutUI = readBoolean(patch, "resumeWithoutUI", config.resumeWithoutUI, warnings, messages);
 	config.tickIntervalMs = readNumber(patch, "tickIntervalMs", config.tickIntervalMs, warnings, {
 		min: 20,
 		max: 600_000,
-	});
+	}, messages);
 
 	if (patch.classify !== undefined) {
 		if (!isRecord(patch.classify)) {
-			warnings.push('"classify" must be an object; keeping the default');
+			warnings.push(messages.configClassifyNotObject);
 		} else {
 			const classify = patch.classify;
-			config.classify.extraWatcher = readStringArray(classify, "extraWatcher", config.classify.extraWatcher, warnings);
+			config.classify.extraWatcher = readStringArray(classify, "extraWatcher", config.classify.extraWatcher, warnings, messages);
 			config.classify.extraInteractive = readStringArray(
 				classify,
 				"extraInteractive",
 				config.classify.extraInteractive,
 				warnings,
+				messages,
 			);
-			config.classify.idleWhitelist = readStringArray(classify, "idleWhitelist", config.classify.idleWhitelist, warnings);
+			config.classify.idleWhitelist = readStringArray(classify, "idleWhitelist", config.classify.idleWhitelist, warnings, messages);
 		}
 	}
 
 	if (config.idleCriticalSec < config.idleWarnSec) {
-		warnings.push("idleCriticalSec is lower than idleWarnSec; using idleWarnSec for both");
+		warnings.push(messages.configOrder("idle"));
 		config.idleCriticalSec = config.idleWarnSec;
 	}
 	if (config.runtimeCriticalSec < config.runtimeWarnSec) {
-		warnings.push("runtimeCriticalSec is lower than runtimeWarnSec; using runtimeWarnSec for both");
+		warnings.push(messages.configOrder("runtime"));
 		config.runtimeCriticalSec = config.runtimeWarnSec;
 	}
 
@@ -255,23 +304,30 @@ function envNumberToSec(
 	name: string,
 	current: number,
 	warnings: string[],
+	messages: GuardMessages,
 ): number {
 	const raw = env[name];
 	if (raw === undefined || raw === "") return current;
 	const value = Number(raw);
 	if (!Number.isFinite(value) || value <= 0) {
-		warnings.push(`${name} must be a positive number of milliseconds; ignoring it`);
+		warnings.push(messages.envNumber(name));
 		return current;
 	}
 	return value / 1000;
 }
 
-function applyEnv(config: GuardConfig, env: NodeJS.ProcessEnv, warnings: string[]): void {
+function applyEnv(
+	config: GuardConfig,
+	env: NodeJS.ProcessEnv,
+	warnings: string[],
+	warnLocale: Locale = DEFAULT_LOCALE,
+): void {
+	const messages = messagesFor(warnLocale);
 	// Legacy PI_WATCHDOG_* names stay supported so an existing setup keeps working.
 	const legacyOff = env.PI_WATCHDOG_OFF;
 	if (legacyOff === "1" || legacyOff === "true") config.enabled = false;
-	config.idleWarnSec = envNumberToSec(env, "PI_WATCHDOG_WARN_MS", config.idleWarnSec, warnings);
-	config.idleCriticalSec = envNumberToSec(env, "PI_WATCHDOG_CRITICAL_MS", config.idleCriticalSec, warnings);
+	config.idleWarnSec = envNumberToSec(env, "PI_WATCHDOG_WARN_MS", config.idleWarnSec, warnings, messages);
+	config.idleCriticalSec = envNumberToSec(env, "PI_WATCHDOG_CRITICAL_MS", config.idleCriticalSec, warnings, messages);
 
 	const off = env.PI_GUARD_OFF;
 	if (off === "1" || off === "true") config.enabled = false;
@@ -280,23 +336,30 @@ function applyEnv(config: GuardConfig, env: NodeJS.ProcessEnv, warnings: string[
 
 	const mode = env.PI_GUARD_MODE;
 	if (mode !== undefined && mode !== "" && !GUARD_MODES.includes(mode as GuardMode)) {
-		warnings.push(`PI_GUARD_MODE="${mode}" is not a known mode; ignoring it`);
+		warnings.push(messages.envMode(mode));
 	} else if (mode) {
 		config.mode = mode as GuardMode;
 	}
 
-	config.idleWarnSec = envNumberToSec(env, "PI_GUARD_IDLE_WARN_MS", config.idleWarnSec, warnings);
-	config.idleCriticalSec = envNumberToSec(env, "PI_GUARD_IDLE_CRITICAL_MS", config.idleCriticalSec, warnings);
-	config.runtimeWarnSec = envNumberToSec(env, "PI_GUARD_RUNTIME_WARN_MS", config.runtimeWarnSec, warnings);
-	config.runtimeCriticalSec = envNumberToSec(env, "PI_GUARD_RUNTIME_CRITICAL_MS", config.runtimeCriticalSec, warnings);
-	config.softKillGraceSec = envNumberToSec(env, "PI_GUARD_SOFT_KILL_GRACE_MS", config.softKillGraceSec, warnings);
-	config.actionCooldownSec = envNumberToSec(env, "PI_GUARD_ACTION_COOLDOWN_MS", config.actionCooldownSec, warnings);
+	// The environment outranks the config file, so a valid PI_GUARD_LOCALE wins here.
+	const locale = env.PI_GUARD_LOCALE;
+	if (locale !== undefined && locale !== "") {
+		if (isLocale(locale)) config.locale = locale;
+		else warnings.push(messages.envLocale(locale));
+	}
+
+	config.idleWarnSec = envNumberToSec(env, "PI_GUARD_IDLE_WARN_MS", config.idleWarnSec, warnings, messages);
+	config.idleCriticalSec = envNumberToSec(env, "PI_GUARD_IDLE_CRITICAL_MS", config.idleCriticalSec, warnings, messages);
+	config.runtimeWarnSec = envNumberToSec(env, "PI_GUARD_RUNTIME_WARN_MS", config.runtimeWarnSec, warnings, messages);
+	config.runtimeCriticalSec = envNumberToSec(env, "PI_GUARD_RUNTIME_CRITICAL_MS", config.runtimeCriticalSec, warnings, messages);
+	config.softKillGraceSec = envNumberToSec(env, "PI_GUARD_SOFT_KILL_GRACE_MS", config.softKillGraceSec, warnings, messages);
+	config.actionCooldownSec = envNumberToSec(env, "PI_GUARD_ACTION_COOLDOWN_MS", config.actionCooldownSec, warnings, messages);
 
 	const maxResumes = env.PI_GUARD_MAX_AUTO_RESUMES;
 	if (maxResumes !== undefined && maxResumes !== "") {
 		const value = Number(maxResumes);
 		if (!Number.isFinite(value) || value < 0 || value > 10) {
-			warnings.push("PI_GUARD_MAX_AUTO_RESUMES must be a number between 0 and 10; ignoring it");
+			warnings.push(messages.envMaxResumes);
 		} else {
 			config.maxAutoResumes = value;
 		}
@@ -308,7 +371,7 @@ function applyEnv(config: GuardConfig, env: NodeJS.ProcessEnv, warnings: string[
 	if (tickRaw !== undefined && tickRaw !== "") {
 		const tick = Number(tickRaw);
 		if (!Number.isFinite(tick) || tick < 20 || tick > 600_000) {
-			warnings.push("PI_GUARD_TICK_MS must be a number of milliseconds between 20 and 600000; ignoring it");
+			warnings.push(messages.envTick);
 		} else {
 			config.tickIntervalMs = tick;
 		}
@@ -337,14 +400,25 @@ export function loadConfig(options: LoadConfigOptions = {}): LoadedConfig {
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (!/ENOENT/.test(message)) {
-			warnings.push(`could not read ${path}: ${message}`);
+			warnings.push(messagesFor(pickLocale(patch, env)).readError(path, message));
 		}
 	}
 
-	const merged = mergeConfig(DEFAULT_CONFIG, patch);
-	applyEnv(merged.config, env, merged.warnings);
+	// Warnings must already speak the user's language, so the locale is resolved
+	// before the merge (env wins, then the config file, then English).
+	const warnLocale = pickLocale(patch, env);
+	const merged = mergeConfig(DEFAULT_CONFIG, patch, warnLocale);
+	applyEnv(merged.config, env, merged.warnings, warnLocale);
 
 	return { config: merged.config, warnings: [...warnings, ...merged.warnings], path };
+}
+
+/** Best-effort locale used to language the diagnostics emitted while loading. */
+function pickLocale(patch: unknown, env: NodeJS.ProcessEnv): Locale {
+	const fromEnv = env.PI_GUARD_LOCALE;
+	if (isLocale(fromEnv)) return fromEnv;
+	if (isRecord(patch) && isLocale(patch.locale)) return patch.locale;
+	return DEFAULT_LOCALE;
 }
 
 export function selectClassifyRules(config: GuardConfig): ClassifyRules {

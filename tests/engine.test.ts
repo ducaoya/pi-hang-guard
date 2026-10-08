@@ -76,9 +76,9 @@ test("warns when a streaming command stops producing output", () => {
 	h.tick();
 	assert.equal(h.notifications.length, 1);
 	assert.equal(h.notifications[0].level, "warning");
-	assert.match(h.notifications[0].message, /无输出/);
+	assert.match(h.notifications[0].message, /idle/);
 	assert.match(h.notifications[0].message, /sleep 600/);
-	assert.match(h.statusOf("t1") ?? "", /1m30s 无输出/);
+	assert.match(h.statusOf("t1") ?? "", /1m30s idle/);
 });
 
 test("an update resets the silence clock so busy commands never warn", () => {
@@ -108,7 +108,7 @@ test("a non-streaming tool is measured by wall clock, not by silence", () => {
 	h.advance(2_000);
 	h.tick();
 	assert.equal(h.notifications.length, 1);
-	assert.match(h.notifications[0].message, /已运行/);
+	assert.match(h.notifications[0].message, /running \d/);
 	assert.equal(h.engine.list()[0].basis, "runtime");
 });
 
@@ -269,8 +269,8 @@ test("a flagged tool reports its final outcome", () => {
 	h.engine.onToolEnd({ toolCallId: "t1", isError: false });
 
 	assert.equal(h.notifications.length, 2);
-	assert.match(h.notifications[1].message, /最终完成/);
-	assert.match(h.notifications[1].message, /最长静默/);
+	assert.match(h.notifications[1].message, /completed/);
+	assert.match(h.notifications[1].message, /longest idle/);
 });
 
 test("completion reporting can be turned off", () => {
