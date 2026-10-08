@@ -10,7 +10,11 @@
 		"extension",
 		"watchdog",
 		"hang",
+		"hung",
+		"stuck",
+		"silence",
 		"timeout",
+		"command-timeout",
 		"bash"
 	],
 	"repository": {
