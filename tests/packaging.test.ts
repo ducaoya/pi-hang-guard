@@ -59,14 +59,20 @@ test("the version constant in the entry matches package.json", () => {
 	assert.equal(match[1], packageJson.version, "bump both files together");
 });
 
-test("the README pair exists, is published, and cross-links", () => {
+test("the README pair exists, cross-links, and only the English one ships", () => {
 	const english = readFileSync(join(root, "README.md"), "utf8");
 	const chinese = readFileSync(join(root, "README.zh-CN.md"), "utf8");
 
 	assert.ok(english.includes("(./README.zh-CN.md)"), "README.md must link to the Chinese docs");
 	assert.ok(chinese.includes("(./README.md)"), "README.zh-CN.md must link back to the English docs");
-	// npm only ships README.md automatically, so the translation needs to be listed.
-	assert.ok(packageJson.files.includes("README.zh-CN.md"), "README.zh-CN.md must be listed in \"files\"");
+	// npm picks the readme with `glob('{README,README.*}')` and takes the FIRST
+	// markdown match. That glob returns README.zh-CN.md before README.md, so
+	// shipping both files in the tarball makes the Chinese doc the npm readme.
+	assert.ok(
+		!packageJson.files.includes("README.zh-CN.md"),
+		"README.zh-CN.md must stay out of \"files\": npm would render it as the package readme",
+	);
+	assert.ok(packageJson.files.includes("README.md"), "README.md must be listed in \"files\"");
 	// Both documents must document the same switchable language.
 	assert.ok(english.includes('"locale": "en"'), "the English README must document the locale key");
 	assert.ok(chinese.includes('"locale": "en"'), "the Chinese README must document the locale key");

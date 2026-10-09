@@ -174,7 +174,7 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 ## 打包约束
 
 - `package.json` 的 `files` 决定发布内容；**新增源文件必须同步加入**（如 `i18n.ts`）
-- npm 只会自动带上 `README.md`，**`README.zh-CN.md` 必须显式列入 `files`**
+- **不要把 `README.zh-CN.md` 加进 `files`**。npm 的 readme 探测是 `glob("{README,README.*}")` 取**第一个** markdown 匹配，而这个 glob 返回的顺序是 `README.zh-CN.md` 在前（brace 展开不是字母序）——两个都进 tarball，npm 页面上显示的就是中文稿。详见 `@npmcli/package-json/lib/normalize.js:333-350`。中文稿留在仓库里给 GitHub 即可；`tests/packaging.test.ts` 会阻止它被重新加入 `files`。
 - `pi.extensions: ["./index.ts"]` 是唯一入口
 - **`index.ts` 只允许 `import type` 引用 pi SDK**，不允许运行时 import。理由：这样入口可在无 pi 的进程里直接加载和测试（打包测试会断言这一点）
 - 入口里的 `VERSION` 常量必须与 `package.json` 的 `version` 一致。由 `tests/packaging.test.ts` 断言把关；`scripts/sync-version.mjs` 经 npm 的 `version` 生命周期脚本（`scripts.version`）在 `npm version` 时自动同步并 `git add`，所以发版无需手工改两处。**手工改版本号时仍必须两处同改。**
