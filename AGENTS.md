@@ -1,6 +1,6 @@
 # AGENTS.md — pi-hang-guard 维护者须知
 
-> 面向自动化 agent 与维护者的项目上下文。**用户可见的安装使用说明见 [`README.md`](./README.md)（英）与 [`README.zh-CN.md`](./README.zh-CN.md)（中）。**
+> 面向自动化 agent 与维护者的项目上下文。**用户可见的安装使用说明见 [`README.md`](./README.md)（英）与 [`docs/README.zh-CN.md`](./docs/README.zh-CN.md)（中）。**
 
 ## 项目是什么
 
@@ -13,7 +13,7 @@ pi（pi-coding-agent）的命令执行看门狗：监听工具执行事件，用
 | 文件 | 面向 | 内容 |
 | --- | --- | --- |
 | `README.md` | 使用者（英文，npm/GitHub/gallery 的默认渲染对象） | 安装、命令、配置表、环境变量、常见问题 |
-| `README.zh-CN.md` | 使用者（中文） | 与 `README.md` 一一对应；两份必须同改，互相在首行互链 |
+| `docs/README.zh-CN.md` | 使用者（中文） | 与 `README.md` 一一对应；两份必须同改，互相在首行互链。**必须呆在 `docs/` 里，不能放根目录**（原因见下方「打包约束」） |
 | `AGENTS.md`（本文） | 维护者 / agent | 架构、检测模型、不变量、测试策略、发布流程、路线图 |
 
 **改动用户可见行为时必须同步更新两份 README；改动实现细节必须同步更新本文。** 不要把实现原理写进 README。
@@ -174,7 +174,7 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 ## 打包约束
 
 - `package.json` 的 `files` 决定发布内容；**新增源文件必须同步加入**（如 `i18n.ts`）
-- **不要把 `README.zh-CN.md` 加进 `files`**。npm 的 readme 探测是 `glob("{README,README.*}")` 取**第一个** markdown 匹配，而这个 glob 返回的顺序是 `README.zh-CN.md` 在前（brace 展开不是字母序）——两个都进 tarball，npm 页面上显示的就是中文稿。详见 `@npmcli/package-json/lib/normalize.js:333-350`。中文稿留在仓库里给 GitHub 即可；`tests/packaging.test.ts` 会阻止它被重新加入 `files`。
+- **中文稿必须放 `docs/`，根目录只能有 `README.md` 一个 readme**。两条 npm 行为叠在一起：① readme 探测是 `glob("{README,README.*}")` 取**第一个** markdown 匹配，而该 glob 返回的顺序是 `README.zh-CN.md` 在前（brace 展开非字母序，见 `@npmcli/package-json/lib/normalize.js:333-350`）；② 任何根目录 `/readme*` 都会被**无条件打进 tarball**，不受 `files` 控制（`npm-packlist/lib/index.js:283` 的 `'!/readme{,.*[^~$]}'`）。两者相加的结果是：根目录多一个 README，npm 页面上就换成它（0.3.0–0.3.3 就踩了这个坑，实测 `readme` 字段是中文全文）。`tests/packaging.test.ts` 会断言根目录 readme 只有 `README.md`。
 - `pi.extensions: ["./index.ts"]` 是唯一入口
 - **`index.ts` 只允许 `import type` 引用 pi SDK**，不允许运行时 import。理由：这样入口可在无 pi 的进程里直接加载和测试（打包测试会断言这一点）
 - 入口里的 `VERSION` 常量必须与 `package.json` 的 `version` 一致。由 `tests/packaging.test.ts` 断言把关；`scripts/sync-version.mjs` 经 npm 的 `version` 生命周期脚本（`scripts.version`）在 `npm version` 时自动同步并 `git add`，所以发版无需手工改两处。**手工改版本号时仍必须两处同改。**
@@ -193,7 +193,7 @@ PI_SDK_ENTRY=/path/to/@earendil-works/pi-coding-agent/dist/index.js npm test   #
 | `tests/config.test.ts` | 默认值、坏 JSON、类型错误、越界钳制、env 优先级、旧变量兼容、不可变性、`configPathFor`、`locale` 的文件/env 优先级与非法值回退 |
 | `tests/i18n.test.ts` | **逐键探针**：两种 locale 的 `GuardMessages` 每一项都非空；同一键在中英下确实不同（防漏译）；format 与通知随 locale 切换；engine 随配置切语言；配置告警语言跟随 locale |
 | `tests/engine.test.ts` | 静默触发/不触发、非流式走挂钟、self-timed、白名单抬高、并发隔离、状态无条件清理、UI 冻结位移、通知配额、状态文案去重、UI 抛错不破坏记账 |
-| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 静态依赖、**两份 README 互相链接且都记录 locale**、observe/guard 两条端到端链路、**打包版软杀诚实降级**、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
+| `tests/packaging.test.ts` | 清单有效性、入口在 `files` 内、入口的本地依赖全部在 `files` 内、`VERSION` 与 package.json 一致、入口无运行时 SDK 静态依赖、**根目录只有 `README.md` 一个 readme 且中英互链**、observe/guard 两条端到端链路、**打包版软杀诚实降级**、驱动 pi 自己的 `discoverAndLoadExtensions` 真实加载 |
 | `tests/escalation.test.ts` | 三种模式的行为、动作幂等性、冷却、续跑上限、软杀宽限期与 pending 重试、软杀不可用降级、无 actions 宿主不崩、abort 抛错不破记账、动作日志与报告文本 |
 
 **测试抓出过的真 bug（都已修，勿回退）：**
@@ -331,5 +331,6 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 | 2026-09-24 | 文档分工：README 面向使用者，AGENTS.md 面向维护者 | 与 `pi-footer-styler` 保持同一套约定 |
 | 2026-10-08 | 输出默认英文，`locale`/`PI_GUARD_LOCALE` 切中文（含配置告警） | pi 的 package gallery 与受众以英文为主；中文用户只需一处配置。不用系统语言自动探测：同一份配置应当在任何机器上产生相同输出 |
 | 2026-10-08 | 文案集中到 `i18n.ts` 的 `GuardMessages` 表，其他模块不得内联字面量 | 漏译与文案漂移是 i18n 的典型故障；接口 + 逐键探针用例双重把关 |
-| 2026-10-08 | README 拆为 `README.md`（英）+ `README.zh-CN.md`（中），互相链接 | npm/GitHub/gallery 只渲染 `README.md`，英文放主文件才能被默认看到；单文件双语会让仓库首页过长 |
+| 2026-10-08 | README 拆为 `README.md`（英，根）+ `docs/README.zh-CN.md`（中），互相链接 | npm/GitHub/gallery 只渲染主 readme，英文放主文件才能被默认看到；单文件双语会让仓库首页过长 |
+| 2026-10-09 | 中文稿放 `docs/` 而不是仓库根 | 根目录任何 `/readme*` 都会被 npm 无条件打包，且 readme 探测会选中它（0.3.0–0.3.3 实测把中文全文发成了 npm readme）。 |
 | 2026-10-08 | `yolo` 能力诊断与 `/guard status` 的 `key=value` 行保持英文 | 前者引用内部构建状态，后者是机器可解析的诊断，不入翻译表 |

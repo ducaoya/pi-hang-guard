@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -59,20 +59,21 @@ test("the version constant in the entry matches package.json", () => {
 	assert.equal(match[1], packageJson.version, "bump both files together");
 });
 
-test("the README pair exists, cross-links, and only the English one ships", () => {
+test("only the English README sits at the root, and the pair cross-links", () => {
 	const english = readFileSync(join(root, "README.md"), "utf8");
-	const chinese = readFileSync(join(root, "README.zh-CN.md"), "utf8");
+	const chinese = readFileSync(join(root, "docs", "README.zh-CN.md"), "utf8");
 
-	assert.ok(english.includes("(./README.zh-CN.md)"), "README.md must link to the Chinese docs");
-	assert.ok(chinese.includes("(./README.md)"), "README.zh-CN.md must link back to the English docs");
-	// npm picks the readme with `glob('{README,README.*}')` and takes the FIRST
-	// markdown match. That glob returns README.zh-CN.md before README.md, so
-	// shipping both files in the tarball makes the Chinese doc the npm readme.
-	assert.ok(
-		!packageJson.files.includes("README.zh-CN.md"),
-		"README.zh-CN.md must stay out of \"files\": npm would render it as the package readme",
-	);
-	assert.ok(packageJson.files.includes("README.md"), "README.md must be listed in \"files\"");
+	// npm resolves the package readme with glob('{README,README.*}') and takes the
+	// FIRST markdown match, which is README.zh-CN.md, not README.md. It also
+	// force-includes any /readme* file in the tarball regardless of `files`
+	// (npm-packlist's '!/readme{,.*[^~$]}'). So a second README at the root would
+	// silently become the npm readme -> the translation lives in docs/.
+	const rootReadmes = readdirSync(root).filter((name) => /^readme/i.test(name));
+	assert.deepEqual(rootReadmes, ["README.md"], "a second root readme would win npm's readme pick");
+	assert.ok(!packageJson.files.includes("docs/README.zh-CN.md"), "the translation stays out of the tarball");
+
+	assert.ok(english.includes("(./docs/README.zh-CN.md)"), "README.md must link to the Chinese docs");
+	assert.ok(chinese.includes("(../README.md)"), "the Chinese docs must link back to the English README");
 	// Both documents must document the same switchable language.
 	assert.ok(english.includes('"locale": "en"'), "the English README must document the locale key");
 	assert.ok(chinese.includes('"locale": "en"'), "the Chinese README must document the locale key");

@@ -1,6 +1,6 @@
 # pi-hang-guard
 
-[English](./README.md) · **中文**
+[English](../README.md) · **中文**
 
 给 [pi](https://pi.dev) 的命令执行看门狗：**命令停止输出时主动提醒你**，而不是让你对着一个卡死的进程干等。
 
@@ -256,4 +256,4 @@ pi 会直接**报错并拒绝加载**（两个扩展都注册 `--no-guard`，fla
 
 MIT
 
-> 架构、检测模型、测试策略与发布流程等实现细节见 [`AGENTS.md`](./AGENTS.md)。
+> 架构、检测模型、测试策略与发布流程等实现细节见 [`AGENTS.md`](../AGENTS.md)。

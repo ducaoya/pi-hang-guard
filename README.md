@@ -1,6 +1,6 @@
 # pi-hang-guard
 
-**English** · [中文文档](./README.zh-CN.md)
+**English** · [中文文档](./docs/README.zh-CN.md)
 
 A command watchdog for [pi](https://pi.dev): **it warns you when a command stops producing output**, instead of leaving you staring at a process that will never print anything again.
 
