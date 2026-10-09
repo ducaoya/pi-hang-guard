@@ -18,6 +18,18 @@ command: npm run dev
 Likely stuck. Running in observe mode, so nothing is interrupted automatically — press Esc to interrupt.
 ```
 
+### Where this fits
+
+This is a single-purpose tool, not a bundle. It does one thing: notice a `bash` command that stopped producing output.
+
+- **Zero runtime dependencies** — nothing else to install, nothing else that can break it
+- **Observe-only by default** — no process is killed and no turn is aborted until you opt into `guard` / `yolo` yourself
+- **Read-only by construction** — it never overrides a built-in tool, never rewrites your command, never touches a tool's input
+- **82 test cases plus a real-pi RPC check** — the event ordering is verified against a live `pi --mode rpc` session, not only against a fake clock
+- **Documented in English and Chinese**, kept in sync
+
+If what you want is a full workstation bundle — structured workflows, memory, kanban boards, parallel agents — that is a different tradeoff and a suite will serve you better. If you want one watchdog that stays out of the way, this is it.
+
 ## Install
 
 ```bash
