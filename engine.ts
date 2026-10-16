@@ -176,6 +176,10 @@ function commandFromArgs(args: unknown): string {
 export function createGuardEngine(deps: GuardDeps): GuardEngine {
 	const now = deps.now ?? (() => Date.now());
 	const entries = new Map<string, Entry>();
+	/** Host-injected actions are what make `guard` / `yolo` capable of acting at all. */
+	const canAct = deps.actions !== undefined;
+	/** The `guard`-mode hint is offered at most once per session, never per tool call. */
+	let guardHintShown = false;
 
 	let uiPromptDepth = 0;
 	let pausedAt = 0;
@@ -514,6 +518,10 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 
 					if (entry.notifications < config.maxNotificationsPerCall) {
 						entry.notifications += 1;
+						const critical = result.level === 2;
+						// Offer `guard` once, and only where switching to it would actually
+						// change the outcome for this host.
+						const hint = critical && !guardHintShown && config.mode === "observe" && canAct;
 						const payload = {
 							toolName: entry.toolName,
 							command: entry.command,
@@ -525,9 +533,10 @@ export function createGuardEngine(deps: GuardDeps): GuardEngine {
 							locale: config.locale,
 						};
 						notify(
-							result.level === 2 ? criticalMessage(payload) : warnMessage(payload),
-							result.level === 2 ? "error" : "warning",
+							critical ? criticalMessage({ ...payload, hint }) : warnMessage(payload),
+							critical ? "error" : "warning",
 						);
+						if (hint) guardHintShown = true;
 					}
 				} else if (result.level >= 1 && config.showStatusBar) {
 					// Keep the visible counter live once a tool has been flagged.

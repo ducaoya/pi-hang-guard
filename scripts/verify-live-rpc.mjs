@@ -119,19 +119,22 @@ function report() {
 	const softKilled = notifications.some((n) => /killed its child processes/.test(n));
 	const resumed = customMessages.some((m) => m.customType === "pi-hang-guard");
 	const statusCleared = guardStatuses.some((e) => e.statusText === undefined);
+	// The one-time nudge toward `guard`, only meaningful in observe mode.
+	const hinted = notifications.some((n) => /Set "mode": "guard"/.test(n));
 
 	console.log("\n=== 断言 ===");
 	const checks = [
 		["产生静默预警", warned],
 		["状态栏最后被清理", statusCleared],
 	];
-	if (mode === "observe") checks.push(["未中止对话", !acted], ["未自动续跑", !resumed]);
-	if (mode === "guard") checks.push(["中止了本轮对话", acted], ["自动续跑并投递报告", resumed], ["触发第二次 agent run", agentStarts >= 2]);
+	if (mode === "observe") checks.push(["未中止对话", !acted], ["未自动续跑", !resumed], ["严重提醒附带 guard 提示", hinted]);
+	if (mode === "guard") checks.push(["中止了本轮对话", acted], ["自动续跑并投递报告", resumed], ["触发第二次 agent run", agentStarts >= 2], ["不给 guard 提示", !hinted]);
 	if (mode === "yolo") {
 		const explained = customMessages.some((m) => /soft kill unavailable/.test(m.content));
 		checks.push(
 			["软杀生效，或明确降级为中正（并给出原因）", (softKilled && !acted) || (acted && explained)],
 			["工具以非零退出", toolEnds.some((t) => t.isError === true)],
+			["不给 guard 提示", !hinted],
 		);
 	}
 

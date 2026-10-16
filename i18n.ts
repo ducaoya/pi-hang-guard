@@ -61,6 +61,11 @@ export interface GuardMessages {
 	warnBody: string;
 	criticalObserveBody: string;
 	criticalActBody: string;
+	/**
+	 * One-time nudge appended to the critical alert in `observe` mode, pointing at
+	 * `guard`. Shown at most once per session so it never becomes nagging.
+	 */
+	guardModeHint: string;
 
 	/* ---- completion report ---- */
 	completedOutcome: string;
@@ -136,6 +141,8 @@ const en: GuardMessages = {
 	criticalObserveBody:
 		"Likely stuck. Running in observe mode, so nothing is interrupted automatically — press Esc to interrupt.",
 	criticalActBody: "Likely stuck. Check whether the command is waiting for input or has lost its connection.",
+	guardModeHint:
+		'Set "mode": "guard" to abort the turn automatically and let the agent keep working on its own.',
 
 	completedOutcome: "completed",
 	failedOutcome: "failed",
@@ -219,6 +226,7 @@ const zh: GuardMessages = {
 	warnBody: "可能卡住。继续等待，或按 Esc 中断。",
 	criticalObserveBody: "疑似卡死。当前为观察模式（observe），不会自动中断；按 Esc 手动中断。",
 	criticalActBody: "疑似卡死，请检查该命令是否在等待输入或已失去连接。",
+	guardModeHint: '把 mode 设为 "guard"，即可自动中止本轮并让 agent 自己继续，不必手动按 Esc。',
 
 	completedOutcome: "完成",
 	failedOutcome: "失败",

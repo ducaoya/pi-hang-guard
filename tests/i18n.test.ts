@@ -23,6 +23,7 @@ function probes(m: GuardMessages): Record<string, string> {
 		warnBody: m.warnBody,
 		criticalObserveBody: m.criticalObserveBody,
 		criticalActBody: m.criticalActBody,
+		guardModeHint: m.guardModeHint,
 		completedOutcome: m.completedOutcome,
 		failedOutcome: m.failedOutcome,
 		peakLabelIdle: m.peakLabel("idle"),
@@ -127,6 +128,7 @@ test("the two locales actually differ where a human reads them", () => {
 		"runtimeObservation",
 		"warnBody",
 		"criticalObserveBody",
+		"guardModeHint",
 		"abortNotice",
 		"softKillNotice",
 		"resume",
@@ -163,6 +165,11 @@ test("formatters and notifications switch language together", () => {
 	assert.match(warnMessage({ ...message, locale: "zh" }), /可能卡住/);
 	assert.match(criticalMessage({ ...message, locale: "en" }), /over the 150s threshold/);
 	assert.match(criticalMessage({ ...message, locale: "zh" }), /超过 150s 阈值/);
+
+	// The guard-mode hint is opt-in and follows the locale.
+	assert.doesNotMatch(criticalMessage({ ...message }), /Set "mode": "guard"/, "off by default");
+	assert.match(criticalMessage({ ...message, hint: true }), /Set "mode": "guard"/);
+	assert.match(criticalMessage({ ...message, hint: true, locale: "zh" }), /把 mode 设为 "guard"/);
 
 	assert.match(
 		completionMessage({

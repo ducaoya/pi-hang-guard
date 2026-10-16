@@ -125,6 +125,8 @@ key 方案 `guard:${toolCallId}`，**必须保持 per-tool**：pi 默认并行�
 
 `maxNotificationsPerCall`（默认 2 = 警告 + 严重）按**每次工具调用**计数，不计入「结束汇报」。设为 1 会连严重提醒一起省掉，这是使用者的选择，不是缺陷。
 
+`observe` 模式的 `guard` 提示（`i18n.ts` 的 `guardModeHint`）**追加在严重提醒的正文末尾**，不单独占一条通知、不吃配额。它由引擎级的 `guardHintShown` 控制为**每会话一次**（不是每次工具调用一次），且宿主未注入 `GuardDeps.actions` 时**不给**——建议一个开了也没用的模式等同于撒谎，与软杀降级同一条原则。
+
 ## 处置（升级阶梯）
 
 探测得出严重等级（level 2）后，`engine.escalate()` 按 `mode` 决定动作。**动作能力由宿主注入**（`GuardDeps.actions`）：不注入就永远不会动作，引擎本身不碰 pi API。
@@ -334,3 +336,4 @@ pi 以 jiti（module cache 关闭）加载扩展，**改完 `/reload` 即生效*
 | 2026-10-08 | README 拆为 `README.md`（英，根）+ `docs/README.zh-CN.md`（中），互相链接 | npm/GitHub/gallery 只渲染主 readme，英文放主文件才能被默认看到；单文件双语会让仓库首页过长 |
 | 2026-10-09 | 中文稿放 `docs/` 而不是仓库根 | 根目录任何 `/readme*` 都会被 npm 无条件打包，且 readme 探测会选中它（0.3.0–0.3.3 实测把中文全文发成了 npm readme）。 |
 | 2026-10-08 | `yolo` 能力诊断与 `/guard status` 的 `key=value` 行保持英文 | 前者引用内部构建状态，后者是机器可解析的诊断，不入翻译表 |
+| 2026-10-16 | `observe` 下首次突破严重阈值时，在提醒正文末尾附一行 `guard` 提示 | 默认值不该让核心能力永不被体验（1800 次下载 / 2 star 说明装完什么都不发生就没人给星）；但提示只在**切过去真的会改变结果**时给——宿主无 `actions` 就不给 |

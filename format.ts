@@ -32,6 +32,8 @@ export interface MessageInput {
 	mode: GuardMode;
 	thresholdSec: number;
 	locale?: Locale;
+	/** Append the one-time `guard`-mode hint (only meaningful for the critical tier). */
+	hint?: boolean;
 }
 
 /** `95s`, `3m12s`, `1h05m`. Sub-second values round up so `0s` never appears. */
@@ -115,6 +117,7 @@ export function criticalMessage(input: MessageInput): string {
 		messages.commandLine(previewCommand(input.command, 80, input.locale)),
 		input.mode === "observe" ? messages.criticalObserveBody : messages.criticalActBody,
 	];
+	if (input.hint) lines.push(messages.guardModeHint);
 	return lines.join("\n");
 }
 

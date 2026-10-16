@@ -81,6 +81,25 @@ test("warns when a streaming command stops producing output", () => {
 	assert.match(h.statusOf("t1") ?? "", /1m30s idle/);
 });
 
+test("observe without escalation actions never offers the guard hint", () => {
+	// This harness injects no `actions`, so `guard` could not act even if it were
+	// enabled. Suggesting it would be a lie.
+	const h = createHarness({ mode: "observe", idleWarnSec: 90, idleCriticalSec: 150 });
+	startBash(h, "t1", "npm run dev");
+
+	h.advance(200_000);
+	h.tick();
+
+	assert.ok(
+		h.notifications.some((n) => /Likely stuck/.test(n.message)),
+		"the critical alert still fires",
+	);
+	assert.ok(
+		!h.notifications.some((n) => /Set "mode": "guard"/.test(n.message)),
+		"no hint when the host cannot act",
+	);
+});
+
 test("an update resets the silence clock so busy commands never warn", () => {
 	const h = createHarness({ idleWarnSec: 90, idleCriticalSec: 150 });
 	startBash(h, "t1", "npm run build");

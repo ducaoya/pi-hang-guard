@@ -242,6 +242,8 @@ Priority, low to high: defaults → config file → `PI_WATCHDOG_*` → `PI_GUAR
 **Why doesn't it interrupt by default?**
 Aborting a turn (or killing a process) is destructive. 0.1.x only observed things; 0.2 added the ability to act but keeps `observe` as the default, so you can first confirm that the thresholds suit your machine before switching to `guard`. In every mode, pressing **Esc** interrupts a hung command by hand.
 
+That safety-first default hides the point of the tool, so the guard nudges once: the first time a tool actually crosses the critical threshold in `observe` mode, that alert carries a one-line hint about `guard`. It fires once per session — not once per hang — and only when the host can act at all, so it never becomes nagging.
+
 **Will a long build be flagged by mistake?**
 No. As long as output keeps coming, the silence clock keeps being reset. Only real silence counts.
 

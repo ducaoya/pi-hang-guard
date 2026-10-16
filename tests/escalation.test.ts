@@ -90,6 +90,40 @@ test("observe mode never touches a running tool", () => {
 	assert.equal(h.engine.stats().actions, 0);
 });
 
+test("observe mode offers the guard hint once, on the first critical alert only", () => {
+	const h = createHarness({ mode: "observe" });
+	const hints = () => h.notifications.filter((n) => /Set "mode": "guard"/.test(n.message));
+
+	h.startBash("t1", "npm run dev");
+	h.advance(200_000);
+	h.tick();
+
+	assert.ok(h.notifications.some((n) => /Likely stuck/.test(n.message)), "the alert still fires");
+	assert.equal(hints().length, 1, "the first critical alert carries the hint");
+
+	// A second stuck command in the same session must not repeat it.
+	h.startBash("t2", "npm run build --watch");
+	h.advance(200_000);
+	h.tick();
+
+	assert.ok(h.notifications.some((n) => /build --watch/.test(n.message)), "the second alert fires too");
+	assert.equal(hints().length, 1, "once per session, not once per tool call");
+});
+
+test("guard mode never offers the guard hint", () => {
+	const h = createHarness({ mode: "guard" });
+	h.startBash("t1", "npm run dev");
+	h.advance(200_000);
+	h.tick();
+
+	assert.equal(h.actions.aborts, 1, "guard mode actually acts");
+	assert.equal(
+		h.notifications.filter((n) => /Set "mode": "guard"/.test(n.message)).length,
+		0,
+		"the hint is for observe mode only",
+	);
+});
+
 test("guard mode aborts the turn and queues exactly one structured resume", () => {
 	const h = createHarness({ mode: "guard", maxAutoResumes: 1 });
 	h.startBash("t1", "npm run dev");
