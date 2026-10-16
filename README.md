@@ -18,6 +18,10 @@ command: npm run dev
 Likely stuck. Running in observe mode, so nothing is interrupted automatically — press Esc to interrupt.
 ```
 
+![pi-hang-guard aborts a stuck command and the agent resumes on its own](https://raw.githubusercontent.com/ducaoya/pi-hang-guard/master/docs/demo.gif)
+
+*Demo runs in `guard` mode with the silence thresholds lowered to 8s / 15s. Defaults are `observe` / 90s / 150s.*
+
 ### Where this fits
 
 This is a single-purpose tool, not a bundle. It does one thing: notice a `bash` command that stopped producing output.

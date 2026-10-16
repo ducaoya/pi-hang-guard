@@ -20,6 +20,10 @@ command: npm run dev
 Likely stuck. Running in observe mode, so nothing is interrupted automatically — press Esc to interrupt.
 ```
 
+![pi-hang-guard 中止卡住的命令，agent 自动继续](https://raw.githubusercontent.com/ducaoya/pi-hang-guard/master/docs/demo.gif)
+
+*演示使用 `guard` 模式，并把静默阈值调低到 8s / 15s。默认为 `observe` / 90s / 150s。*
+
 ### 它适合谁
 
 这是一个单点工具，不是套件。只做一件事：发现停止输出的 `bash` 命令。

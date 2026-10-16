@@ -37,7 +37,9 @@
 	"pi": {
 		"extensions": [
 			"./index.ts"
-		]
+		],
+		"image": "https://raw.githubusercontent.com/ducaoya/pi-hang-guard/master/docs/demo.gif",
+		"video": "https://github.com/ducaoya/pi-hang-guard/raw/master/docs/demo.mp4"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
